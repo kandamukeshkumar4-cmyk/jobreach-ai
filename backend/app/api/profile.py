@@ -1,13 +1,26 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
 from pydantic import BaseModel
 from openai import OpenAI
 from app.config import get_settings
-from app.database import get_db
+from app.database import get_db, get_supabase
 from app.models.schemas import ProfileCreate, ProfileOut
 import io
 import asyncio
 
 router = APIRouter()
+
+
+def _extract_user_id(authorization: str | None) -> str | None:
+    """Best-effort: extract Supabase user_id from Bearer JWT. Never raises."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:]
+    try:
+        sb = get_supabase()
+        user = sb.auth.get_user(token)
+        return user.user.id if user and user.user else None
+    except Exception:
+        return None
 
 _MAX_UPLOAD = 5 * 1024 * 1024  # 5 MB
 
@@ -98,9 +111,39 @@ async def parse_resume(file: UploadFile = File(...)):
     return {"text": text, "filename": filename}
 
 
+@router.get("/me", response_model=ProfileOut)
+async def get_my_profile(
+    authorization: str | None = Header(default=None),
+    db=Depends(get_db),
+):
+    """Return the profile for the authenticated user (looks up by user_id in JWT)."""
+    user_id = _extract_user_id(authorization)
+    if not user_id:
+        raise HTTPException(401, "Authentication required")
+    result = (
+        db.table("profiles")
+        .select("*")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "No profile found for this user")
+    return result.data[0]
+
+
 @router.post("/", response_model=ProfileOut, status_code=201)
-async def create_profile(payload: ProfileCreate, db=Depends(get_db)):
-    result = db.table("profiles").insert(payload.model_dump()).execute()
+async def create_profile(
+    payload: ProfileCreate,
+    db=Depends(get_db),
+    authorization: str | None = Header(default=None),
+):
+    row = payload.model_dump()
+    # Associate profile with the authenticated Supabase user so /me works
+    uid = _extract_user_id(authorization)
+    if uid:
+        row["user_id"] = uid
+    result = db.table("profiles").insert(row).execute()
     return result.data[0]
 
 

@@ -168,20 +168,50 @@ function Topbar() {
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter()
+  const setActiveProfile = useAppStore((s) => s.setActiveProfile)
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
-    try {
-      const profileId = localStorage.getItem(PROFILE_ID_KEY)
-      if (!profileId) {
-        router.replace('/onboarding')
-        return
+    async function resolveProfile() {
+      // Fast path: localStorage hit → trust it, no network call
+      try {
+        const cached = localStorage.getItem(PROFILE_ID_KEY)
+        if (cached) {
+          setActiveProfile(cached)
+          setReady(true)
+          return
+        }
+      } catch {
+        // localStorage unavailable — fall through to cloud check
       }
-    } catch {
-      // localStorage unavailable — allow through
+
+      // Cloud check: ask the backend if this user already has a profile
+      // Works on any device, any browser, after clearing cache
+      try {
+        const { api } = await import('@/lib/api')
+        const profile = await api.profile.me()
+        if (profile?.id) {
+          try { localStorage.setItem(PROFILE_ID_KEY, profile.id) } catch {}
+          setActiveProfile(profile.id)
+          setReady(true)
+          return
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : ''
+        // 401 = not logged in → let auth handle it; 404 = logged in but no profile → onboard
+        if (msg.startsWith('404')) {
+          router.replace('/onboarding')
+          return
+        }
+        // 401 / network error → show app (auth pages will handle the rest)
+      }
+
+      // No profile found → send to onboarding
+      router.replace('/onboarding')
     }
-    setReady(true)
-  }, [router])
+
+    resolveProfile()
+  }, [router, setActiveProfile])
 
   if (!ready) {
     return (

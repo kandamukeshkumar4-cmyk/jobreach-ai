@@ -151,6 +151,7 @@ export const api = {
       request<unknown[]>(`/resumes/match/${matchId}`),
   },
   profile: {
+    me: () => request<ProfileOut>('/profile/me'),
     get: (id: string) => request<ProfileOut>(`/profile/${id}`),
     create: (payload: ProfileCreate) =>
       request<ProfileOut>('/profile/', { method: 'POST', body: payload }),
