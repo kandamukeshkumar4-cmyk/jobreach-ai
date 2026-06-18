@@ -8,6 +8,8 @@ import {
   ListChecks,
   FileText,
   ArrowRight,
+  CheckCircle2,
+  Circle,
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -20,7 +22,6 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 
-// Applications considered "in progress" (i.e. not closed out).
 const CLOSED_STATUSES = new Set(['rejected', 'discarded', 'skip']);
 
 function safeNumber(value: unknown): number {
@@ -44,16 +45,18 @@ function StatCard({
   value,
   icon: Icon,
   accent,
+  href,
 }: {
   label: string;
   value: string;
   icon: LucideIcon;
   accent: string;
+  href?: string;
 }) {
-  return (
-    <Card className="p-5">
+  const inner = (
+    <Card className="group p-5 transition-colors hover:border-[var(--border-bright)]">
       <div className="flex items-start justify-between">
-        <span className="text-xs font-medium uppercase tracking-[0.5px] text-[var(--muted)]">
+        <span className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">
           {label}
         </span>
         <span
@@ -69,8 +72,17 @@ function StatCard({
       <div className="mt-4 font-mono text-3xl font-bold tracking-[-1px] text-[var(--text)]">
         {value}
       </div>
+      {href && (
+        <div className="mt-3 flex items-center gap-1 text-xs font-medium text-[var(--muted)] opacity-0 transition-opacity group-hover:opacity-100">
+          View all
+          <ArrowRight className="h-3 w-3" />
+        </div>
+      )}
     </Card>
   );
+
+  if (href) return <Link href={href}>{inner}</Link>;
+  return inner;
 }
 
 function StatCardSkeleton() {
@@ -86,9 +98,8 @@ function StatCardSkeleton() {
 }
 
 const WARMUP_SECONDS = 30;
-
 const WARMUP_STEPS = [
-  'Waking up AI agent…',
+  'Waking up the AI agent…',
   'Loading job search engine…',
   'Connecting to data sources…',
   'AI Agent is almost ready…',
@@ -125,7 +136,6 @@ function WarmingUpBanner({ onRetry }: { onRetry: () => void }) {
     <Card className="overflow-hidden p-6">
       <div className="flex flex-col gap-4">
         <div className="flex items-center gap-3">
-          {/* Pulsing orb */}
           <span className="relative flex h-8 w-8 shrink-0 items-center justify-center">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--cyan)] opacity-20" />
             <span className="relative flex h-5 w-5 rounded-full bg-[color-mix(in_srgb,var(--cyan)_20%,transparent)] ring-1 ring-[var(--cyan)]/40">
@@ -137,18 +147,16 @@ function WarmingUpBanner({ onRetry }: { onRetry: () => void }) {
               {WARMUP_STEPS[stepIndex]}
             </p>
             <p className="text-xs text-[var(--muted)] tracking-[-0.1px]">
-              This takes up to 30 seconds on first load
+              Cold start — takes up to 30 seconds
             </p>
           </div>
           <button
             onClick={onRetry}
             className="ml-auto text-xs text-[var(--muted)] underline-offset-2 hover:text-[var(--cyan)] hover:underline"
           >
-            Skip
+            Retry now
           </button>
         </div>
-
-        {/* Progress bar */}
         <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--border)]">
           <div
             className="h-full rounded-full bg-gradient-to-r from-[var(--cyan)] to-[var(--violet)] transition-all duration-100 ease-linear"
@@ -156,6 +164,92 @@ function WarmingUpBanner({ onRetry }: { onRetry: () => void }) {
           />
         </div>
       </div>
+    </Card>
+  );
+}
+
+interface GettingStartedStep {
+  label: string;
+  description: string;
+  done: boolean;
+  href: string;
+  cta: string;
+}
+
+function GettingStartedCard({ steps }: { steps: GettingStartedStep[] }) {
+  const allDone = steps.every((s) => s.done);
+  if (allDone) return null;
+
+  const nextStep = steps.find((s) => !s.done);
+
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="border-b border-[var(--border)] px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
+              Getting started
+            </h2>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">
+              {steps.filter((s) => s.done).length} of {steps.length} steps
+              complete
+            </p>
+          </div>
+          {/* Progress dots */}
+          <div className="flex items-center gap-1.5">
+            {steps.map((s, i) => (
+              <div
+                key={i}
+                className={`h-1.5 w-6 rounded-full transition-colors ${
+                  s.done ? 'bg-[var(--cyan)]' : 'bg-[var(--border)]'
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <ul className="divide-y divide-[var(--border)]">
+        {steps.map((s, i) => (
+          <li
+            key={i}
+            className={`flex items-center gap-4 px-6 py-4 ${
+              s.done ? 'opacity-50' : ''
+            }`}
+          >
+            {s.done ? (
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-[var(--cyan)]" />
+            ) : (
+              <Circle className="h-5 w-5 shrink-0 text-[var(--border-bright)]" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold tracking-[-0.2px] text-[var(--text)]">
+                {s.label}
+              </p>
+              <p className="mt-0.5 text-xs text-[var(--muted)]">
+                {s.description}
+              </p>
+            </div>
+            {!s.done && (
+              <Link href={s.href}>
+                <Button variant="primary" className="shrink-0 text-xs px-4 py-2">
+                  {s.cta}
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              </Link>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {nextStep && (
+        <div className="border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--cyan)_4%,transparent)] px-6 py-3">
+          <p className="text-xs text-[var(--muted)]">
+            <span className="font-semibold text-[var(--cyan)]">Next up:</span>{' '}
+            {nextStep.description}
+          </p>
+        </div>
+      )}
     </Card>
   );
 }
@@ -178,24 +272,17 @@ export default function DashboardPage() {
 
   const missions = missionsQuery.data ?? [];
 
-  // Stat derivations — all defensive against missing/partial data.
   const totalMissions = missions.length;
-
   const totalMatches = missions.reduce(
     (acc, m) => acc + safeNumber(m.total_matches),
     0,
   );
-
   const applicationsInProgress = inProgressCount(trackerStatsQuery.data);
-
-  // Resumes generated: count tracker rows that carry a generated resume PDF.
-  // If the tracker list failed to load, fall back to an em dash.
   const resumesGenerated = trackerListQuery.isError
     ? '—'
     : String(
-        (trackerListQuery.data ?? []).filter(
-          (a) => Boolean(a.resume_pdf_url),
-        ).length,
+        (trackerListQuery.data ?? []).filter((a) => Boolean(a.resume_pdf_url))
+          .length,
       );
 
   const recentMissions = [...missions]
@@ -205,9 +292,6 @@ export default function DashboardPage() {
     )
     .slice(0, 5);
 
-  // The page is anchored by the missions list. If that core call is in flight
-  // with no cached data, show a full loading state; if it hard-fails, show the
-  // retry banner. Secondary stats degrade gracefully on their own.
   const isInitialLoading = missionsQuery.isLoading;
   const isCoreError = missionsQuery.isError;
 
@@ -217,10 +301,57 @@ export default function DashboardPage() {
     trackerListQuery.refetch();
   };
 
+  // Getting started checklist
+  const hasResumes =
+    !trackerListQuery.isError &&
+    (trackerListQuery.data ?? []).some((a) => Boolean(a.resume_pdf_url));
+
+  const gettingStartedSteps: GettingStartedStep[] = [
+    {
+      label: 'Profile created',
+      description: 'Your profile tells the AI who you are and what you want.',
+      done: true, // they reached dashboard = profile exists
+      href: '/profile',
+      cta: 'Edit profile',
+    },
+    {
+      label: 'Run your first job search',
+      description:
+        'Launch a mission and the AI will scan hundreds of job boards to find the best matches for you.',
+      done: totalMissions > 0,
+      href: '/missions/new',
+      cta: 'Launch mission',
+    },
+    {
+      label: 'Review your top matches',
+      description:
+        'Each match is scored A–F. Focus on your A and B grade jobs first.',
+      done: totalMatches > 0,
+      href: '/matches',
+      cta: 'View matches',
+    },
+    {
+      label: 'Tailor a resume for a job',
+      description:
+        'Click "Tailor Resume" on any match card to generate a custom DOCX resume in seconds.',
+      done: hasResumes,
+      href: '/matches',
+      cta: 'Generate resume',
+    },
+  ];
+
   return (
     <div className="space-y-8">
+      {/* Getting started checklist — shows until all steps done */}
+      {!isInitialLoading && !isCoreError && (
+        <GettingStartedCard steps={gettingStartedSteps} />
+      )}
+
       {/* Stat cards */}
       <section>
+        <h2 className="mb-4 text-xs font-bold uppercase tracking-widest text-[var(--muted)]">
+          Overview
+        </h2>
         {isInitialLoading ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCardSkeleton />
@@ -237,12 +368,14 @@ export default function DashboardPage() {
               value={String(totalMissions)}
               icon={Rocket}
               accent="var(--cyan)"
+              href="/missions"
             />
             <StatCard
-              label="Active matches"
+              label="Total matches"
               value={String(totalMatches)}
               icon={Target}
               accent="var(--violet)"
+              href="/matches"
             />
             <StatCard
               label="Applications in progress"
@@ -255,12 +388,14 @@ export default function DashboardPage() {
               }
               icon={ListChecks}
               accent="var(--green)"
+              href="/tracker"
             />
             <StatCard
               label="Resumes generated"
               value={trackerListQuery.isLoading ? '…' : resumesGenerated}
               icon={FileText}
               accent="var(--amber)"
+              href="/resumes"
             />
           </div>
         )}
@@ -269,13 +404,13 @@ export default function DashboardPage() {
       {/* Recent missions */}
       <section>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold tracking-[-0.8px] text-[var(--text)]">
+          <h2 className="text-xs font-bold uppercase tracking-widest text-[var(--muted)]">
             Recent Missions
           </h2>
           {totalMissions > 0 && (
             <Link
               href="/missions"
-              className="inline-flex items-center gap-1 text-sm font-medium text-[var(--muted2)] transition-colors hover:text-[var(--cyan)]"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--muted2)] transition-colors hover:text-[var(--cyan)]"
             >
               View all
               <ArrowRight className="h-3.5 w-3.5" />
@@ -287,7 +422,7 @@ export default function DashboardPage() {
           {isInitialLoading ? (
             <div className="flex items-center justify-center gap-3 px-6 py-14 text-sm text-[var(--muted)]">
               <Spinner size={18} />
-              Loading missions…
+              Loading…
             </div>
           ) : isCoreError ? (
             <div className="p-6">
@@ -296,12 +431,12 @@ export default function DashboardPage() {
           ) : recentMissions.length === 0 ? (
             <EmptyState
               title="No missions yet"
-              description="Launch your first mission to start scanning and scoring jobs against your profile."
+              description="Launch a mission and the AI will scan job boards and rank the best matches for your profile."
               action={
                 <Link href="/missions/new">
                   <Button variant="primary">
                     <Rocket className="h-4 w-4" />
-                    New Mission
+                    Launch your first mission
                   </Button>
                 </Link>
               }
@@ -316,7 +451,7 @@ export default function DashboardPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-semibold tracking-[-0.2px] text-[var(--text)]">
-                        {mission.title || 'Untitled mission'}
+                        {mission.title || mission.search_query || 'Untitled mission'}
                       </div>
                       <div className="mt-0.5 text-xs text-[var(--muted)]">
                         {relativeTime(mission.created_at)}

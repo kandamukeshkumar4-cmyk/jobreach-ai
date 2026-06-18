@@ -9,6 +9,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 
+const PROFILE_ID_KEY = 'jobreach.activeProfileId'
+
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/missions', label: 'Missions', icon: Rocket },
@@ -165,6 +167,37 @@ function Topbar() {
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {
+  const router = useRouter()
+  const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    try {
+      const profileId = localStorage.getItem(PROFILE_ID_KEY)
+      if (!profileId) {
+        router.replace('/onboarding')
+        return
+      }
+    } catch {
+      // localStorage unavailable — allow through
+    }
+    setReady(true)
+  }, [router])
+
+  if (!ready) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--cyan)]">
+            <span className="text-sm font-bold text-[#07071a]">JR</span>
+          </div>
+          <div className="h-1 w-32 overflow-hidden rounded-full bg-[var(--border)]">
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-[var(--cyan)]" />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="bg-[var(--bg)] min-h-screen">
       <Sidebar />
