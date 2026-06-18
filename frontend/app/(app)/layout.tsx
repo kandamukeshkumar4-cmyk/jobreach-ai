@@ -1,0 +1,177 @@
+'use client'
+
+import Link from 'next/link'
+import { usePathname, useRouter } from 'next/navigation'
+import { LayoutDashboard, Rocket, Target, ListChecks, FileText, User, LogOut, Plus } from 'lucide-react'
+import { useAppStore } from './store'
+import type { ReactNode } from 'react'
+import { useState, useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
+import type { User as SupabaseUser } from '@supabase/supabase-js'
+
+const navItems = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/missions', label: 'Missions', icon: Rocket },
+  { href: '/matches', label: 'Matches', icon: Target },
+  { href: '/tracker', label: 'Tracker', icon: ListChecks },
+  { href: '/resumes', label: 'Resumes', icon: FileText },
+  { href: '/profile', label: 'Profile', icon: User },
+]
+
+function Sidebar() {
+  const pathname = usePathname()
+  const router = useRouter()
+  const runningMissions = useAppStore((s) => s.runningMissions)
+  const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [sessionLoading, setSessionLoading] = useState(true)
+
+  useEffect(() => {
+    if (supabase) {
+      supabase.auth.getSession().then(({ data }) => {
+        setUser(data.session?.user ?? null)
+        setSessionLoading(false)
+      })
+    } else {
+      setSessionLoading(false)
+    }
+
+    const { data: listener } = supabase?.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    }) ?? { data: null }
+
+    return () => {
+      listener?.subscription.unsubscribe()
+    }
+  }, [])
+
+  const email = user?.email ?? ''
+  const displayName =
+    user?.user_metadata?.full_name ??
+    user?.user_metadata?.name ??
+    (email ? email.split('@')[0] : '')
+
+  const initials = displayName
+    ? displayName
+        .split(' ')
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w: string) => w[0])
+        .join('')
+        .toUpperCase()
+        .slice(0, 2)
+    : ''
+
+  async function handleSignOut() {
+    await supabase?.auth.signOut()
+    router.push('/login')
+  }
+
+  return (
+    <div className="fixed left-0 top-0 z-50 h-screen w-[240px] border-r border-[var(--border)] bg-[var(--surface)] flex flex-col">
+      <div className="px-6 pt-8 pb-6 border-b border-[var(--border)]">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded bg-[var(--cyan)] flex items-center justify-center">
+            <span className="text-[#07071a] text-xs font-bold">JR</span>
+          </div>
+          <span className="font-semibold text-2xl tracking-[-1.5px] text-white">JobReach</span>
+        </div>
+      </div>
+
+      <nav className="flex-1 px-3 py-6">
+        <ul className="space-y-1">
+          {navItems.map((item) => {
+            const isActive = pathname === item.href || pathname?.startsWith(item.href + '/')
+            const Icon = item.icon
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive
+                    ? 'bg-[var(--card)] text-[var(--cyan)]'
+                    : 'text-[var(--muted2)] hover:text-[var(--text)] hover:bg-[var(--card)]'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  {item.label}
+                  {item.label === 'Missions' && runningMissions > 0 && (
+                    <span className="ml-auto px-2 py-0.5 text-[10px] font-mono bg-[var(--cyan)] text-[#07071a] rounded-full">
+                      {runningMissions}
+                    </span>
+                  )}
+                </Link>
+              </li>
+            )
+          })}
+        </ul>
+      </nav>
+
+      <div className="p-4 border-t border-[var(--border)] mt-auto">
+        <div className="flex items-center gap-3 px-3 py-3 bg-[var(--card)] rounded-2xl">
+          <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center text-xs font-mono ring-1 ring-[var(--border-bright)]">
+            {initials || <span className="w-3 h-3 rounded-full bg-[var(--muted)] opacity-40" />}
+          </div>
+          <div className="text-sm min-w-0">
+            {sessionLoading ? (
+              <div className="h-4 w-20 rounded bg-[var(--border)] animate-pulse" />
+            ) : (
+              <>
+                <div className="font-medium text-[var(--text)] truncate">{displayName || '—'}</div>
+                <div className="text-[var(--muted)] text-xs truncate">{email}</div>
+              </>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={handleSignOut}
+          className="mt-4 flex w-full items-center justify-center gap-2 px-4 py-2 text-[var(--muted)] hover:text-[var(--red)] hover:bg-[var(--card)] rounded-xl text-sm font-medium transition-colors"
+        >
+          <LogOut className="w-4 h-4" />
+          Sign out
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function Topbar() {
+  const pathname = usePathname()
+  const getTitle = (path: string | null) => {
+    if (!path) return 'Console'
+    if (path.includes('dashboard')) return 'Dashboard'
+    if (path.includes('missions')) return 'Missions'
+    if (path.includes('matches')) return 'Matches'
+    if (path.includes('tracker')) return 'Tracker'
+    if (path.includes('resumes')) return 'Resumes'
+    if (path.includes('profile')) return 'Profile'
+    return 'JobReach AI'
+  }
+
+  return (
+    <div className="fixed left-[240px] right-0 top-0 z-40 h-16 border-b border-[var(--border)] bg-[var(--surface)] flex items-center px-8">
+      <h1 className="text-2xl font-semibold tracking-[-1px] text-[var(--text)]">
+        {getTitle(pathname)}
+      </h1>
+      <div className="ml-auto">
+        <Link
+          href="/missions/new"
+          className="flex items-center gap-2 px-5 py-2 bg-[var(--cyan)] hover:bg-[#67e8f9] text-[#07071a] font-semibold text-sm rounded-xl transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          New Mission
+        </Link>
+      </div>
+    </div>
+  )
+}
+
+export default function AppLayout({ children }: { children: ReactNode }) {
+  return (
+    <div className="bg-[var(--bg)] min-h-screen">
+      <Sidebar />
+      <Topbar />
+      <main className="ml-[240px] pt-16 min-h-screen p-8">
+        {children}
+      </main>
+    </div>
+  )
+}
