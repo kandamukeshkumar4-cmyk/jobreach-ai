@@ -146,7 +146,10 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
                  f"<strong>{scored['grade']} match</strong>: {job['title']} at {job['company']} — {scored['overall_score']}/5.0",
                  detail=scored["why_fit"])
 
-        # Check if all jobs for this mission are scored → mark complete
+        # Increment atomic Redis counter then check if mission is complete.
+        # Using a Redis counter (not warn-event count) avoids stale events from
+        # prior runs pre-inflating the tally and triggering early completion.
+        r.incr(f"mission:{mission_id}:attempted")
         _check_mission_complete(db, r, mission_id)
 
     except Exception as exc:
@@ -154,23 +157,27 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
         try:
             from app.workers.search import _pub
             _pub(r, mission_id, "warn", f"Scoring skipped for job {job_id}: {exc}")
+            r.incr(f"mission:{mission_id}:attempted")
             _check_mission_complete(db, r, mission_id)
         except Exception:
             pass
 
 
 def _check_mission_complete(db, r, mission_id: str):
-    """Close the mission when all filtered jobs have been scored (success or failure)."""
+    """Close the mission when all filtered jobs have been scored (success or failure).
+
+    Uses a Redis INCR counter (reset in run_mission before dispatch) instead of counting
+    warn DB events, so stale events from prior runs cannot cause early completion.
+    """
     mission = db.table("missions").select("total_filtered, status").eq("id", mission_id).single().execute().data
     if not mission or mission["status"] != "running":
         return
 
-    match_count = len(db.table("matches").select("id").eq("mission_id", mission_id).execute().data or [])
-    warn_count = len(db.table("mission_events").select("id").eq("mission_id", mission_id).eq("event_type", "warn").execute().data or [])
-    attempted = match_count + warn_count
+    attempted = int(r.get(f"mission:{mission_id}:attempted") or 0)
     total_filtered = mission["total_filtered"] or 0
 
     if total_filtered and attempted >= total_filtered:
+        match_count = len(db.table("matches").select("id").eq("mission_id", mission_id).execute().data or [])
         strong = len(db.table("matches").select("id").eq("mission_id", mission_id).in_("grade", ["A", "B"]).execute().data or [])
 
         db.table("missions").update({

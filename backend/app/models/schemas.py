@@ -68,7 +68,8 @@ class MissionCreate(BaseModel):
     location_filter: Optional[str] = None
     salary_min: Optional[int] = None
     salary_currency: str = "USD"
-    sources: List[str] = ["exa", "greenhouse", "lever", "ashby", "wellfound", "rss"]
+    sources: List[str] = ["exa", "greenhouse", "lever", "ashby",
+                          "smartrecruiters", "workable", "remoteok", "rss"]
     profile_id: str
 
 class MissionOut(BaseModel):

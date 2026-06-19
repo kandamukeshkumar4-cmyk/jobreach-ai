@@ -39,7 +39,7 @@ CREATE TABLE missions (
     location_filter TEXT,
     salary_min      INTEGER,
     salary_currency TEXT DEFAULT 'USD',
-    sources         TEXT[] DEFAULT '{exa,greenhouse,lever,ashby,wellfound,rss}',
+    sources         TEXT[] DEFAULT '{exa,greenhouse,lever,ashby,smartrecruiters,workable,remoteok,rss}',
     status          TEXT DEFAULT 'pending'
                     CHECK (status IN ('pending','running','completed','failed')),
     total_scanned   INTEGER DEFAULT 0,

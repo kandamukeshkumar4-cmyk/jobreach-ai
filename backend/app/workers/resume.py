@@ -4,6 +4,7 @@ Follows the 28-rule resume rulebook: business value bullets, JD DNA, 1-page max.
 All companies, dates, contact info, education extracted from the actual resume — nothing hardcoded.
 """
 import json
+import re
 import base64
 import io
 from app.workers.celery_app import celery_app
@@ -100,6 +101,111 @@ Respond ONLY with valid JSON (no markdown fences):
   }},
   "keywords_injected": ["kw1", "kw2", "kw3", "kw4", "kw5"]
 }}"""
+
+
+def _extract_json(raw: str) -> dict:
+    """Parse model JSON robustly: strip fences, isolate the outermost object, repair trailing commas."""
+    if not raw:
+        raise ValueError("empty LLM response")
+    text = raw.strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+        if text.lstrip().lower().startswith("json"):
+            text = text.lstrip()[4:]
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start:end + 1]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Common small-model slips: trailing commas before } or ]
+        return json.loads(re.sub(r",(\s*[}\]])", r"\1", text))
+
+
+COVER_LETTER_PROMPT = """You are an expert career writer. Write a concise, specific cover letter
+for this candidate and job. US business-letter conventions.
+
+TONE: {tone}  (direct = crisp and confident; warm = personable; formal = polished and reserved)
+
+RULES:
+- 3 short body paragraphs, 2-4 sentences each. No fluff, no clichés.
+- P1: hook — why this role/company, and the single strongest reason they fit.
+- P2: concrete proof — 1-2 achievements/skills from the resume that map to the JD.
+- P3: close — enthusiasm + a forward-looking line. No salary talk.
+- NEVER invent employers, titles, or metrics not in the resume.
+- Banned: "I am writing to apply", "Highly motivated", "Results-driven", "To whom it may concern".
+
+## Candidate Resume
+{resume_markdown}
+
+## Job
+Title: {title}
+Company: {company}
+Description: {description}
+
+Respond ONLY with valid JSON (no markdown fences):
+{{
+  "greeting": "Dear {company} Hiring Team,",
+  "body": ["<paragraph 1>", "<paragraph 2>", "<paragraph 3>"],
+  "closing": "Sincerely,"
+}}"""
+
+
+def _build_cover_letter_docx(data: dict, candidate_name: str, contact: dict, company: str) -> bytes:
+    """Build a clean 1-page cover letter DOCX reusing the resume's contact/style."""
+    from datetime import datetime
+    from docx import Document
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    doc = Document()
+    section = doc.sections[0]
+    section.top_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.7)
+    section.left_margin = Inches(0.9)
+    section.right_margin = Inches(0.9)
+    doc.styles['Normal'].paragraph_format.space_after = Pt(0)
+
+    def para(text="", bold=False, size=10.5, color=None, align=WD_ALIGN_PARAGRAPH.LEFT,
+             space_before=0, space_after=6):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(space_before)
+        p.paragraph_format.space_after = Pt(space_after)
+        p.alignment = align
+        if text:
+            run = p.add_run(text)
+            run.bold = bold
+            run.font.size = Pt(size)
+            run.font.name = 'Calibri'
+            if color:
+                run.font.color.rgb = RGBColor(*color)
+        return p
+
+    # Header — name + contact
+    para(candidate_name.upper(), bold=True, size=18, color=(0x1A, 0x1A, 0x2E), space_after=1)
+    contact_bits = [contact.get(k) for k in ("email", "phone", "location", "linkedin") if contact.get(k)]
+    para("  ·  ".join(contact_bits), size=9, color=(0x6B, 0x72, 0x80), space_after=10)
+
+    # Date
+    try:
+        para(datetime.now().strftime("%B %d, %Y"), size=10.5, space_after=10)
+    except Exception:
+        pass
+
+    if company:
+        para(f"{company} — Hiring Team", size=10.5, space_after=10)
+
+    # Greeting + body + closing
+    para(data.get("greeting", "Dear Hiring Team,"), size=10.5, space_after=8)
+    for paragraph in data.get("body", []):
+        para(paragraph, size=10.5, space_after=8)
+    para(data.get("closing", "Sincerely,"), size=10.5, space_before=6, space_after=2)
+    para(candidate_name, bold=True, size=10.5)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 def _build_docx(data: dict, candidate_name: str) -> bytes:
@@ -304,7 +410,7 @@ def _build_docx(data: dict, candidate_name: str) -> bytes:
     return buf.getvalue()
 
 
-@celery_app.task(bind=True, queue="resume", name="app.workers.resume.generate_resume_task")
+@celery_app.task(bind=True, queue="resume", name="app.workers.resume.generate_resume_task", time_limit=180, soft_time_limit=170)
 def generate_resume_task(self, match_id: str, include_cover_letter: bool = False, tone: str = "direct"):
     s = get_settings()
     db = get_db()
@@ -328,41 +434,61 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
         client = OpenAI(
             api_key=s.nvidia_api_key,
             base_url="https://integrate.api.nvidia.com/v1",
-            timeout=150,
+            timeout=90.0,
         )
 
         msg = client.chat.completions.create(
             model="meta/llama-3.3-70b-instruct",
             max_tokens=1500,
             messages=[{"role": "user", "content": TAILORING_PROMPT.format(
-                resume_markdown=resume_markdown[:4000],
-                full_name=profile.get("full_name", ""),
+                resume_markdown=resume_markdown[:3500],
                 email=profile.get("email", ""),
-                skills=", ".join(profile.get("skills", [])),
-                target_roles=", ".join(profile.get("target_roles", [])),
                 title=job.get("title", ""),
                 company=job.get("company", ""),
-                description=(job.get("description_snippet") or "")[:2000],
+                description=(job.get("description_snippet") or "")[:1800],
             )}],
         )
 
-        raw = msg.choices[0].message.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        tailored = json.loads(raw)
+        tailored = _extract_json(msg.choices[0].message.content)
 
-        docx_bytes = _build_docx(tailored, profile.get("full_name", "Candidate"))
+        candidate_name = profile.get("full_name", "Candidate")
+        docx_bytes = _build_docx(tailored, candidate_name)
 
         docx_b64 = (
             "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,"
             + base64.b64encode(docx_bytes).decode()
         )
 
+        # ── COVER LETTER (optional) ──────────────────────────────────────────
+        cover_letter_b64 = None
+        if include_cover_letter:
+            try:
+                cl_msg = client.chat.completions.create(
+                    model="meta/llama-3.3-70b-instruct",
+                    max_tokens=900,
+                    messages=[{"role": "user", "content": COVER_LETTER_PROMPT.format(
+                        tone=tone or "direct",
+                        resume_markdown=resume_markdown[:2500],
+                        title=job.get("title", ""),
+                        company=job.get("company", ""),
+                        description=(job.get("description_snippet") or "")[:1200],
+                    )}],
+                )
+                cl_data = _extract_json(cl_msg.choices[0].message.content)
+                cl_bytes = _build_cover_letter_docx(
+                    cl_data, candidate_name, tailored.get("contact", {}), job.get("company", ""),
+                )
+                cover_letter_b64 = (
+                    "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,"
+                    + base64.b64encode(cl_bytes).decode()
+                )
+            except Exception as cl_exc:
+                log.warning("cover_letter_generation_failed", match_id=match_id, error=str(cl_exc))
+
         row = {
             "match_id": match_id,
             "pdf_url": docx_b64,
+            "cover_letter_pdf_url": cover_letter_b64,
             "keywords_injected": tailored.get("keywords_injected", []),
             "tailored_markdown": json.dumps(tailored),
         }
@@ -371,13 +497,16 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
 
         db.table("matches").update({"resume_ready": True}).eq("id", match_id).execute()
 
-        download_url = (
-            f"https://jobreach-api.azurewebsites.net/api/v1/resumes/{resume_id}/download"
-            if resume_id else None
+        base = "https://jobreach-api.azurewebsites.net/api/v1/resumes"
+        download_url = f"{base}/{resume_id}/download" if resume_id else None
+        cover_letter_url = (
+            f"{base}/{resume_id}/cover-letter/download"
+            if (resume_id and cover_letter_b64) else None
         )
 
         return {
             "pdf_url": download_url,
+            "cover_letter_url": cover_letter_url,
             "resume_id": resume_id,
             "keywords_injected": tailored.get("keywords_injected", []),
         }
