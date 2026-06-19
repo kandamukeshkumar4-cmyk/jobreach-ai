@@ -161,6 +161,11 @@ def run_mission(self: Task, mission_id: str):
         # ── FILTER (location, role, conservative salary) ─────────────────────
         _pub(r, mission_id, "run", f"Applying profile filters: location={location or 'any'}, salary≥${salary_min or 0:,}...")
         filtered = _filter_jobs(unique_jobs, profile, location, salary_min)
+        # Round-robin interleave by source so the SCORE_CAP cap samples ACROSS
+        # providers. Without this, Exa (appended first, ~100 results) fills the
+        # entire front of the list and starves Ashby/SmartRecruiters/Workable/
+        # RemoteOK — they get scanned but never reach scoring.
+        filtered = _interleave_by_source(filtered)
         total_filtered = len(filtered)
         _pub(r, mission_id, "ok", f"Filtered to {total_filtered} matching roles ({total_scanned - total_filtered} eliminated)")
 
@@ -627,6 +632,31 @@ def _parse_salary(text: str):
         return min(vals), max(vals)
 
     return None, None
+
+
+def _interleave_by_source(jobs: list) -> list:
+    """
+    Round-robin interleave jobs by their 'source' so a downstream cap (SCORE_CAP)
+    samples fairly across providers instead of draining the first source.
+
+    Within each source, original order is preserved. Sources are cycled in the
+    order they first appear, so e.g. [exa, exa, ats, workable] → [exa, ats, workable, exa].
+    """
+    from collections import OrderedDict
+    buckets = OrderedDict()
+    for j in jobs:
+        buckets.setdefault(j.get("source") or "?", []).append(j)
+    result = []
+    queues = list(buckets.values())
+    idx = 0
+    while queues:
+        q = queues[idx % len(queues)]
+        result.append(q.pop(0))
+        if not q:
+            queues.remove(q)
+        else:
+            idx += 1
+    return result
 
 
 def _filter_jobs(jobs: list, profile: dict, location: str, salary_min: int) -> list:
