@@ -434,12 +434,13 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
         client = OpenAI(
             api_key=s.nvidia_api_key,
             base_url="https://integrate.api.nvidia.com/v1",
-            timeout=90.0,
+            timeout=8.0,
         )
 
         msg = client.chat.completions.create(
-            model="meta/llama-3.3-70b-instruct",
-            max_tokens=1500,
+            model="meta/llama-3.1-8b-instruct",
+            max_tokens=900,
+            temperature=0.1,
             messages=[{"role": "user", "content": TAILORING_PROMPT.format(
                 resume_markdown=resume_markdown[:3500],
                 email=profile.get("email", ""),
@@ -464,8 +465,9 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
         if include_cover_letter:
             try:
                 cl_msg = client.chat.completions.create(
-                    model="meta/llama-3.3-70b-instruct",
-                    max_tokens=900,
+                    model="meta/llama-3.1-8b-instruct",
+                    max_tokens=600,
+                    temperature=0.1,
                     messages=[{"role": "user", "content": COVER_LETTER_PROMPT.format(
                         tone=tone or "direct",
                         resume_markdown=resume_markdown[:2500],
@@ -504,10 +506,20 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
             if (resume_id and cover_letter_b64) else None
         )
 
+        # Update applications table so the Resumes page can surface these docs
+        try:
+            db.table("applications").update({
+                "resume_pdf_url": download_url,
+                "cover_letter_pdf_url": cover_letter_url,
+            }).eq("match_id", match_id).execute()
+        except Exception as app_exc:
+            log.warning("applications_resume_url_update_failed", match_id=match_id, error=str(app_exc))
+
         return {
             "pdf_url": download_url,
             "cover_letter_url": cover_letter_url,
             "resume_id": resume_id,
+            "candidate_name": candidate_name,
             "keywords_injected": tailored.get("keywords_injected", []),
         }
 

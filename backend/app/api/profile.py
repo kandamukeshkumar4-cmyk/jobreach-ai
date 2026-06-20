@@ -47,13 +47,13 @@ def _llm_format(raw: str) -> str:
     client = OpenAI(
         api_key=s.nvidia_api_key,
         base_url="https://integrate.api.nvidia.com/v1",
-        timeout=25.0,
+        timeout=4.0,
     )
     resp = client.chat.completions.create(
         model="meta/llama-3.1-8b-instruct",
-        max_tokens=1500,
+        max_tokens=1000,
         temperature=0.1,
-        messages=[{"role": "user", "content": _FORMAT_PROMPT.format(raw=raw[:5000])}],
+        messages=[{"role": "user", "content": _FORMAT_PROMPT.format(raw=raw[:4000])}],
     )
     md = resp.choices[0].message.content.strip()
     if md.startswith("```"):
@@ -103,7 +103,7 @@ async def parse_resume(file: UploadFile = File(...)):
         # Hard cap at 50 s — fall back to raw text if the model is slow.
         text = await asyncio.wait_for(
             asyncio.to_thread(_llm_format, raw.strip()),
-            timeout=30.0,
+            timeout=4.5,
         )
     except Exception:
         text = raw.strip()

@@ -5,62 +5,74 @@ import { useQuery } from '@tanstack/react-query';
 import {
   FileText,
   FileSignature,
-  Target,
+  RotateCw,
   ExternalLink,
   AlertTriangle,
-  RotateCw,
-  ShieldCheck,
   ScanLine,
   ListOrdered,
+  ShieldCheck,
   Printer,
-  ArrowRight,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import type { ApplicationOut } from '@/lib/types';
-import { Card } from '@/components/ui/card';
 import { GradeBadge } from '@/components/ui/grade-badge';
-import { EmptyState } from '@/components/ui/empty-state';
-import { Spinner } from '@/components/ui/spinner';
+import { AgentOrb } from '@/components/ui/agent-orb';
 import { Button } from '@/components/ui/button';
 
-// The four pipeline phases that summarise the 16-step ATS build, in order.
+// ── Pipeline steps ────────────────────────────────────────────────────────────
+
 const PIPELINE_STEPS: ReadonlyArray<{
   icon: LucideIcon;
   title: string;
   detail: string;
   accent: string;
+  key: string;
 }> = [
   {
+    key: 'extract',
     icon: ScanLine,
     title: 'Keyword extraction',
-    detail:
-      'Parses the job description for hard skills, tools and seniority signals an ATS scans for.',
+    detail: 'Parses the JD for ATS signals.',
     accent: 'var(--cyan)',
   },
   {
+    key: 'reorder',
     icon: ListOrdered,
     title: 'Content reorder',
-    detail:
-      'Reframes and re-ranks your real experience so the most relevant proof leads — never fabricated.',
+    detail: 'Re-ranks your proof without fabrication.',
     accent: 'var(--violet)',
   },
   {
+    key: 'ats',
     icon: ShieldCheck,
     title: 'ATS compliance',
-    detail:
-      'Strips tables, columns and graphics, normalises headings, and verifies clean machine-readable structure.',
+    detail: 'Strips tables, normalises headings.',
     accent: 'var(--green)',
   },
   {
+    key: 'render',
     icon: Printer,
-    title: 'PDF render',
-    detail:
-      'Typesets one tailored document per role into a selectable-text, parser-safe PDF.',
+    title: 'DOCX render',
+    detail: 'Typesets one parser-safe document per role.',
     accent: 'var(--amber)',
   },
 ];
+
+// ── Deterministic badge color per company ──────────────────────────────────
+
+const PALETTE = [
+  '#06b6d4', '#8b5cf6', '#10b981', '#f59e0b',
+  '#ef4444', '#ec4899', '#3b82f6', '#14b8a6',
+];
+function companyColor(name: string): string {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % PALETTE.length;
+  return PALETTE[h];
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 interface ResumeDoc {
   application: ApplicationOut;
@@ -68,227 +80,122 @@ interface ResumeDoc {
   coverLetterUrl?: string;
 }
 
-function ErrorBanner({ onRetry }: { onRetry: () => void }) {
-  return (
-    <Card className="p-6">
-      <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:text-left">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--red)_12%,transparent)] text-[var(--red)]">
-          <AlertTriangle className="h-5 w-5" />
-        </span>
-        <div className="flex-1">
-          <h3 className="text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
-            Couldn&apos;t load your documents
-          </h3>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            The backend may be cold-starting (this can take up to 30 seconds).
-            Give it a moment, then retry.
-          </p>
-        </div>
-        <Button variant="secondary" onClick={onRetry} className="shrink-0">
-          <RotateCw className="h-4 w-4" />
-          Retry
-        </Button>
-      </div>
-    </Card>
-  );
-}
-
-function ResumeCardSkeleton() {
-  return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="h-4 w-2/3 rounded bg-[var(--card)]" />
-          <div className="h-3 w-2/5 rounded bg-[var(--card)]" />
-        </div>
-        <div className="h-6 w-12 rounded-full bg-[var(--card)]" />
-      </div>
-      <div className="mt-5 flex gap-2">
-        <div className="h-9 w-28 rounded-[7px] bg-[var(--card)]" />
-        <div className="h-9 w-28 rounded-[7px] bg-[var(--card)]" />
-      </div>
-    </Card>
-  );
-}
-
-function DocLink({
-  href,
-  icon: Icon,
-  label,
-}: {
-  href: string;
-  icon: LucideIcon;
-  label: string;
-}) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="group inline-flex items-center gap-2 rounded-[7px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium tracking-[-0.2px] text-[var(--text)] transition-colors hover:border-[var(--border-bright)] hover:text-[var(--cyan)]"
-    >
-      <Icon className="h-4 w-4 text-[var(--muted2)] transition-colors group-hover:text-[var(--cyan)]" />
-      {label}
-      <ExternalLink className="h-3.5 w-3.5 text-[var(--muted)] transition-colors group-hover:text-[var(--cyan)]" />
-    </a>
-  );
-}
-
-function ResumeCard({ doc }: { doc: ResumeDoc }) {
-  const { application, resumeUrl, coverLetterUrl } = doc;
-  return (
-    <Card className="flex flex-col p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-semibold tracking-[-0.2px] text-[var(--text)]">
-            {application.job_title || 'Untitled role'}
-          </h3>
-          <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
-            {application.company || 'Unknown company'}
-          </p>
-        </div>
-        <GradeBadge grade={application.grade} score={application.overall_score} />
-      </div>
-
-      <div className="mt-5 flex flex-wrap gap-2">
-        {resumeUrl ? (
-          <DocLink href={resumeUrl} icon={FileText} label="Open resume" />
-        ) : (
-          <span className="inline-flex items-center gap-2 rounded-[7px] border border-dashed border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
-            <FileText className="h-4 w-4" />
-            No resume PDF
-          </span>
-        )}
-        {coverLetterUrl && (
-          <DocLink
-            href={coverLetterUrl}
-            icon={FileSignature}
-            label="Cover letter"
-          />
-        )}
-      </div>
-
-      <div className="mt-4 border-t border-[var(--border)] pt-3 text-xs text-[var(--muted)]">
-        Tailored {relativeTime(application.applied_at ?? application.created_at)}
-      </div>
-    </Card>
-  );
-}
-
 export default function ResumesPage() {
-  const trackerQuery = useQuery<ApplicationOut[]>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<ApplicationOut[]>({
     queryKey: ['tracker', 'list'],
     queryFn: () => api.tracker.list(),
+    refetchInterval: 15_000,
   });
 
-  const docs: ResumeDoc[] = (trackerQuery.data ?? [])
+  const docs: ResumeDoc[] = (data ?? [])
     .filter((a) => Boolean(a.resume_pdf_url) || Boolean(a.cover_letter_pdf_url))
     .map((application) => ({
       application,
-      resumeUrl: application.resume_pdf_url,
-      coverLetterUrl: application.cover_letter_pdf_url,
+      resumeUrl: application.resume_pdf_url ?? undefined,
+      coverLetterUrl: application.cover_letter_pdf_url ?? undefined,
     }))
     .sort(
       (a, b) =>
-        new Date(
-          b.application.applied_at ?? b.application.created_at,
-        ).getTime() -
+        new Date(b.application.applied_at ?? b.application.created_at).getTime() -
         new Date(a.application.applied_at ?? a.application.created_at).getTime(),
     );
 
   const coverLetterCount = docs.filter((d) => Boolean(d.coverLetterUrl)).length;
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <header>
-        <h1 className="text-2xl font-extrabold tracking-[-1.2px] text-[var(--text)]">
-          Document Studio
-        </h1>
-        <p className="mt-1.5 max-w-2xl text-sm text-[var(--muted2)]">
-          Every resume is built through a 16-step ATS pipeline — one tailored
-          document per role. Your real experience, ethically reframed for the
-          job at hand. Nothing is ever fabricated.
-        </p>
-      </header>
+    <div className="space-y-6">
+      {/* ── Chrome bar ─────────────────────────────────────────────────────── */}
+      <div className="overflow-hidden rounded-xl border border-[var(--border-bright)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--surface)_94%,white_2%),var(--surface))] shadow-[0_18px_80px_rgba(0,0,0,0.24)]">
+        <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] px-4 py-3">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5" aria-hidden="true">
+              <span className="size-2.5 rounded-full bg-[#ff5f57]" />
+              <span className="size-2.5 rounded-full bg-[#febc2e]" />
+              <span className="size-2.5 rounded-full bg-[#28c840]" />
+            </div>
+            <span className="text-[11px] uppercase tracking-[1.8px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
+              DOCUMENT.STUDIO
+            </span>
+          </div>
 
-      {/* Pipeline explainer */}
-      <section>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {PIPELINE_STEPS.map((step, i) => {
-            const Icon = step.icon;
-            return (
-              <Card key={step.title} className="p-4">
-                <div className="flex items-center justify-between">
+          <div className="ml-auto flex items-center gap-3">
+            {!isLoading && docs.length > 0 && (
+              <span className="text-[11px] tabular-nums text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>
+                {docs.length} {docs.length === 1 ? 'resume' : 'resumes'}
+                {coverLetterCount > 0 && ` · ${coverLetterCount} cover ${coverLetterCount === 1 ? 'letter' : 'letters'}`}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="flex items-center gap-1.5 rounded-full border border-[var(--border)] px-2.5 py-1 text-[11px] text-[var(--muted2)] transition-colors hover:border-[var(--border-bright)] hover:text-[var(--text)] disabled:opacity-40"
+            >
+              <RotateCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Page header */}
+        <div className="px-5 py-5">
+          <h1 className="text-xl font-extrabold tracking-[-0.8px] text-[var(--text)]">
+            Document Studio
+          </h1>
+          <p className="mt-1 max-w-2xl text-[13px] text-[var(--muted)]">
+            Every resume is built through a 16-step ATS pipeline — one tailored DOCX per role. Your real experience, ethically reframed. Nothing is ever fabricated.
+          </p>
+        </div>
+
+        {/* Pipeline steps */}
+        <div className="border-t border-[var(--border)] px-5 py-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {PIPELINE_STEPS.map((step, i) => {
+              const Icon = step.icon;
+              return (
+                <div
+                  key={step.key}
+                  className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--card)_70%,transparent)] p-3"
+                >
                   <span
-                    className="flex h-8 w-8 items-center justify-center rounded-lg"
+                    className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
                     style={{
                       color: step.accent,
-                      backgroundColor: `color-mix(in srgb, ${step.accent} 12%, transparent)`,
+                      backgroundColor: `color-mix(in srgb, ${step.accent} 14%, transparent)`,
                     }}
                   >
                     <Icon className="h-4 w-4" />
                   </span>
-                  <span className="font-mono text-xs text-[var(--muted)]">
-                    {String(i + 1).padStart(2, '0')}
-                  </span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-[12px] font-semibold text-[var(--text)]">{step.title}</p>
+                      <span className="text-[10px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
+                        {String(i + 1).padStart(2, '0')}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--muted)]">{step.detail}</p>
+                  </div>
                 </div>
-                <h3 className="mt-3 text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
-                  {step.title}
-                </h3>
-                <p className="mt-1 text-xs leading-relaxed text-[var(--muted)]">
-                  {step.detail}
-                </p>
-              </Card>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
-      </section>
+      </div>
 
-      {/* Documents */}
+      {/* ── Documents ──────────────────────────────────────────────────────── */}
       <section>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold tracking-[-0.8px] text-[var(--text)]">
+        <div className="mb-3 flex items-center gap-2 px-1">
+          <h2 className="text-[12px] uppercase tracking-[1.6px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
             Generated Documents
           </h2>
-          {!trackerQuery.isLoading && !trackerQuery.isError && docs.length > 0 && (
-            <span className="font-mono text-xs text-[var(--muted)]">
-              {docs.length} {docs.length === 1 ? 'resume' : 'resumes'}
-              {coverLetterCount > 0 && (
-                <span className="text-[var(--muted2)]">
-                  {' '}
-                  · {coverLetterCount} cover{' '}
-                  {coverLetterCount === 1 ? 'letter' : 'letters'}
-                </span>
-              )}
-            </span>
-          )}
         </div>
 
-        {trackerQuery.isLoading ? (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <ResumeCardSkeleton />
-            <ResumeCardSkeleton />
-            <ResumeCardSkeleton />
-          </div>
-        ) : trackerQuery.isError ? (
-          <ErrorBanner onRetry={() => trackerQuery.refetch()} />
+        {isError ? (
+          <ErrorBanner onRetry={() => void refetch()} />
+        ) : isLoading ? (
+          <SkeletonGrid />
         ) : docs.length === 0 ? (
-          <Card>
-            <EmptyState
-              title="No documents yet"
-              description="Tailor a resume from the Match board and your generated PDFs will land here, ready to open and send."
-              action={
-                <Link href="/missions">
-                  <Button variant="primary">
-                    <Target className="h-4 w-4" />
-                    Go to the Match board
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </Link>
-              }
-            />
-          </Card>
+          <EmptyDocuments />
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {docs.map((doc) => (
@@ -297,6 +204,179 @@ export default function ResumesPage() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+// ── Document card ─────────────────────────────────────────────────────────────
+
+function ResumeCard({ doc }: { doc: ResumeDoc }) {
+  const { application, resumeUrl, coverLetterUrl } = doc;
+  const color = companyColor(application.company || 'Z');
+  const initial = (application.company || '?')[0].toUpperCase();
+
+  return (
+    <div className="group flex flex-col overflow-hidden rounded-xl border border-[var(--border-bright)] bg-[color-mix(in_srgb,var(--card)_82%,transparent)] transition-all duration-200 hover:border-[color-mix(in_srgb,var(--cyan)_40%,var(--border-bright))] hover:shadow-[0_0_32px_rgba(34,211,238,0.08)]">
+      {/* Top accent */}
+      <div className="h-[2px] w-full" style={{ background: `linear-gradient(90deg, ${color}, transparent)` }} />
+
+      <div className="flex flex-col gap-3 p-4">
+        {/* Company badge + info */}
+        <div className="flex items-start gap-3">
+          <div
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white shadow-lg"
+            style={{ backgroundColor: color, boxShadow: `0 4px 16px ${color}44` }}
+          >
+            {initial}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13px] font-semibold text-[var(--text)]">
+              {application.job_title || 'Untitled role'}
+            </p>
+            <p className="truncate text-[11px] text-[var(--muted)]">
+              {application.company || 'Unknown company'}
+            </p>
+          </div>
+          <GradeBadge grade={application.grade} score={application.overall_score} />
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-[var(--border)]" />
+
+        {/* Download links */}
+        <div className="flex flex-wrap gap-2">
+          {resumeUrl ? (
+            <a
+              href={resumeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group/link inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--cyan)] hover:text-[var(--cyan)]"
+            >
+              <FileText className="h-3.5 w-3.5 text-[var(--muted2)] transition-colors group-hover/link:text-[var(--cyan)]" />
+              Resume
+              <ExternalLink className="h-3 w-3 text-[var(--muted)] transition-colors group-hover/link:text-[var(--cyan)]" />
+            </a>
+          ) : (
+            <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-[var(--border)] px-3 py-1.5 text-[12px] text-[var(--muted)]">
+              <FileText className="h-3.5 w-3.5" />
+              No resume yet
+            </span>
+          )}
+
+          {coverLetterUrl && (
+            <a
+              href={coverLetterUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group/link inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--violet)] hover:text-[var(--violet)]"
+            >
+              <FileSignature className="h-3.5 w-3.5 text-[var(--muted2)] transition-colors group-hover/link:text-[var(--violet)]" />
+              Cover letter
+              <ExternalLink className="h-3 w-3 text-[var(--muted)] transition-colors group-hover/link:text-[var(--violet)]" />
+            </a>
+          )}
+        </div>
+
+        {/* Footer */}
+        <p className="text-[11px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>
+          Tailored {relativeTime(application.applied_at ?? application.created_at)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+
+function EmptyDocuments() {
+  return (
+    <div className="overflow-hidden rounded-xl border border-[var(--border-bright)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--surface)_94%,white_2%),var(--surface))]">
+      <div className="border-b border-[var(--border)] px-4 py-3">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <span className="size-2.5 rounded-full bg-[#ff5f57]" />
+            <span className="size-2.5 rounded-full bg-[#febc2e]" />
+            <span className="size-2.5 rounded-full bg-[#28c840]" />
+          </div>
+          <span className="text-[11px] uppercase tracking-[1.8px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
+            waiting for first resume
+          </span>
+          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] px-2 py-0.5 text-[11px] text-[var(--muted2)]">
+            <span className="size-1.5 rounded-full bg-[var(--amber)] mission-node-active" />
+            Idle
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-4 p-6 md:grid-cols-3">
+        {['Go to Matches → find a job', 'Click "Tailor Resume"', 'Download appears here'].map((msg, i) => (
+          <div key={i} className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_80%,transparent)] p-4 opacity-60">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)]">
+              <span className="text-[11px] font-bold text-[var(--cyan)]" style={{ fontFamily: 'var(--font-mono)' }}>
+                {String(i + 1).padStart(2, '0')}
+              </span>
+            </div>
+            <p className="text-[12px] text-[var(--muted)]">{msg}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t border-[var(--border)] px-6 pb-6 pt-4 text-center">
+        <AgentOrb state="idle" size={12} />
+        <p className="mt-3 text-[13px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
+          No documents generated yet
+        </p>
+        <p className="mt-1 text-[12px] text-[var(--muted)]">
+          Tailor a resume from the Match board and it will land here ready to download.
+        </p>
+        <div className="mt-4">
+          <Link href="/matches">
+            <Button variant="primary">
+              Go to Matches
+            </Button>
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Loading / error ───────────────────────────────────────────────────────────
+
+function SkeletonGrid() {
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[color-mix(in_srgb,var(--card)_70%,transparent)] p-4">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 animate-pulse rounded-lg bg-[var(--surface)]" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3.5 w-3/4 animate-pulse rounded bg-[var(--surface)]" />
+              <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--surface)]" />
+            </div>
+          </div>
+          <div className="h-px bg-[var(--border)]" />
+          <div className="flex gap-2">
+            <div className="h-8 w-24 animate-pulse rounded-lg bg-[var(--surface)]" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ErrorBanner({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex items-center gap-4 rounded-xl border border-[color-mix(in_srgb,var(--red)_30%,var(--border))] bg-[color-mix(in_srgb,var(--red)_6%,var(--surface))] px-5 py-4">
+      <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--red)]" />
+      <div className="flex-1 min-w-0">
+        <p className="text-[13px] font-semibold text-[var(--text)]">Couldn&apos;t load documents</p>
+        <p className="text-[12px] text-[var(--muted)]">The backend may be cold-starting. Give it a moment then retry.</p>
+      </div>
+      <Button variant="secondary" onClick={onRetry}>
+        <RotateCw className="h-4 w-4" />
+        Retry
+      </Button>
     </div>
   );
 }

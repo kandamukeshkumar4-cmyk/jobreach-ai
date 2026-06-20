@@ -38,6 +38,17 @@ type ViewMode = 'kanban' | 'table';
 
 const TRACKER_KEY = ['tracker', 'list'] as const;
 
+// Status accent for chrome bar chip
+const STATUS_TOTAL_TONE: Record<string, string> = {
+  evaluated: 'var(--muted2)',
+  applied: 'var(--cyan)',
+  responded: 'var(--violet)',
+  interview: 'var(--amber)',
+  offer: 'var(--green)',
+  rejected: 'var(--red)',
+  discarded: 'var(--muted)',
+};
+
 export default function TrackerPage() {
   const queryClient = useQueryClient();
   const [view, setView] = useState<ViewMode>('kanban');
@@ -105,15 +116,95 @@ export default function TrackerPage() {
 
   const showToggle = !isLoading && !isError && applications.length > 0;
 
+  // Count by pipeline status for the chrome bar chips
+  const byStatus = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const a of applications) {
+      counts[a.status] = (counts[a.status] ?? 0) + 1;
+    }
+    return counts;
+  }, [applications]);
+
+  const pipelineCount = PIPELINE_STATUSES.reduce((n, s) => n + (byStatus[s.value] ?? 0), 0);
+
   return (
     <div className="space-y-6">
-      <Header
-        count={applications.length}
-        view={view}
-        onChangeView={setView}
-        showToggle={showToggle}
-        refreshing={isFetching && !isLoading}
-      />
+      {/* ── Chrome bar ─────────────────────────────────────────────────────── */}
+      <div className="overflow-hidden rounded-xl border border-[var(--border-bright)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--surface)_94%,white_2%),var(--surface))] shadow-[0_8px_40px_rgba(0,0,0,0.18)]">
+        <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] px-4 py-3">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5" aria-hidden="true">
+              <span className="size-2.5 rounded-full bg-[#ff5f57]" />
+              <span className="size-2.5 rounded-full bg-[#febc2e]" />
+              <span className="size-2.5 rounded-full bg-[#28c840]" />
+            </div>
+            <span className="text-[11px] uppercase tracking-[1.8px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
+              PIPELINE.TRACKER
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 md:ml-4">
+            {PIPELINE_STATUSES.map((s) => {
+              const n = byStatus[s.value] ?? 0;
+              if (!n && applications.length > 0) return null;
+              return (
+                <span
+                  key={s.value}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] uppercase tracking-[0.8px] text-[var(--muted2)]"
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                >
+                  <span className="size-1.5 rounded-full" style={{ backgroundColor: s.accent }} />
+                  {s.label} {n > 0 && <span className="font-semibold text-[var(--text)]">{n}</span>}
+                </span>
+              );
+            })}
+          </div>
+
+          <div className="ml-auto flex items-center gap-3">
+            {isFetching && !isLoading && (
+              <span className="text-[11px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>Refreshing…</span>
+            )}
+            {showToggle && (
+              <div className="inline-flex shrink-0 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-0.5">
+                <ToggleButton active={view === 'kanban'} onClick={() => setView('kanban')}>
+                  <Columns3 className="h-3.5 w-3.5" />
+                  Kanban
+                </ToggleButton>
+                <ToggleButton active={view === 'table'} onClick={() => setView('table')}>
+                  <TableIcon className="h-3.5 w-3.5" />
+                  Table
+                </ToggleButton>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Inline header row */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+          <div>
+            <h2 className="text-xl font-extrabold tracking-[-0.8px] text-[var(--text)]">
+              Application tracker
+            </h2>
+            <p className="mt-0.5 text-[13px] text-[var(--muted)]">
+              {applications.length === 0
+                ? 'Track jobs from the Match board to build your pipeline.'
+                : `${applications.length} ${applications.length === 1 ? 'application' : 'applications'} · ${pipelineCount} in pipeline`}
+            </p>
+          </div>
+          {!isLoading && !isError && applications.length > 0 && (
+            <div className="grid grid-cols-3 gap-2 md:grid-cols-5">
+              {PIPELINE_STATUSES.map((s) => (
+                <div key={s.value} className="flex flex-col items-center rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--card)_60%,transparent)] px-3 py-2">
+                  <span className="text-[18px] font-bold tabular-nums" style={{ color: byStatus[s.value] ? s.accent : 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+                    {byStatus[s.value] ?? 0}
+                  </span>
+                  <span className="mt-0.5 text-[10px] uppercase tracking-[0.6px] text-[var(--muted)]">{s.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       {isLoading ? (
         <KanbanSkeleton />
@@ -123,20 +214,7 @@ export default function TrackerPage() {
           onRetry={() => void refetch()}
         />
       ) : applications.length === 0 ? (
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-          <EmptyState
-            title="No applications tracked yet"
-            description="Track jobs from the Match board to build your application pipeline and follow them from evaluated to offer."
-            action={
-              <Link href="/matches">
-                <Button variant="primary">
-                  <Target className="h-4 w-4" />
-                  Go to Matches
-                </Button>
-              </Link>
-            }
-          />
-        </div>
+        <EmptyTrackerState />
       ) : view === 'kanban' ? (
         <KanbanView
           applications={applications}
@@ -167,58 +245,40 @@ export default function TrackerPage() {
 }
 
 /* ----------------------------------------------------------------------------
- * Header
+ * Empty tracker state
  * ------------------------------------------------------------------------- */
 
-function Header({
-  count,
-  view,
-  onChangeView,
-  showToggle,
-  refreshing,
-}: {
-  count: number;
-  view: ViewMode;
-  onChangeView: (v: ViewMode) => void;
-  showToggle: boolean;
-  refreshing: boolean;
-}) {
+function EmptyTrackerState() {
   return (
-    <div className="flex items-end justify-between gap-4">
-      <div>
-        <h2 className="text-xl font-extrabold tracking-[-0.8px] text-[var(--text)]">
-          Application tracker
-        </h2>
-        <p className="mt-1 flex items-center gap-2 text-sm text-[var(--muted)]">
-          {count === 0
-            ? 'Move applications through your pipeline.'
-            : `${count} ${count === 1 ? 'application' : 'applications'} in your pipeline.`}
-          {refreshing && (
-            <span className="text-[11px] tracking-[0.4px] text-[var(--muted)]">
-              · Refreshing…
-            </span>
-          )}
-        </p>
-      </div>
-
-      {showToggle && (
-        <div className="inline-flex shrink-0 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-0.5">
-          <ToggleButton
-            active={view === 'kanban'}
-            onClick={() => onChangeView('kanban')}
-          >
-            <Columns3 className="h-4 w-4" />
-            Kanban
-          </ToggleButton>
-          <ToggleButton
-            active={view === 'table'}
-            onClick={() => onChangeView('table')}
-          >
-            <TableIcon className="h-4 w-4" />
-            Table
-          </ToggleButton>
+    <div className="overflow-hidden rounded-xl border border-[var(--border-bright)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--surface)_94%,white_2%),var(--surface))]">
+      <div className="border-b border-[var(--border)] px-4 py-3">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <span className="size-2.5 rounded-full bg-[#ff5f57]" />
+            <span className="size-2.5 rounded-full bg-[#febc2e]" />
+            <span className="size-2.5 rounded-full bg-[#28c840]" />
+          </div>
+          <span className="text-[11px] uppercase tracking-[1.8px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
+            pipeline empty
+          </span>
         </div>
-      )}
+      </div>
+      <div className="flex flex-col items-center justify-center px-8 py-14 text-center">
+        <p className="text-[13px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
+          No applications tracked yet
+        </p>
+        <p className="mt-2 max-w-sm text-[12px] text-[var(--muted)]">
+          Click <strong className="text-[var(--text)]">Track</strong> on any match card to add it to this pipeline. You can then drag cards between stages and log notes.
+        </p>
+        <div className="mt-5">
+          <Link href="/matches">
+            <Button variant="primary">
+              <Target className="h-4 w-4" />
+              Go to Matches
+            </Button>
+          </Link>
+        </div>
+      </div>
     </div>
   );
 }

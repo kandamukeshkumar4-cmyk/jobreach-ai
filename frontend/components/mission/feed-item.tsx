@@ -38,9 +38,11 @@ export interface FeedItemProps {
   event: MissionEventOut;
   /** Animate the row in. New rows animate; replayed history can skip it. */
   animate?: boolean;
+  /** Emphasize the newest live row without changing the historical log. */
+  highlight?: boolean;
 }
 
-export function FeedItem({ event, animate = true }: FeedItemProps) {
+export function FeedItem({ event, animate = true, highlight = false }: FeedItemProps) {
   const icon = EVENT_ICON[event.event_type] ?? FALLBACK_ICON;
 
   const rowStyle: CSSProperties = { fontFamily: 'var(--font-mono)' };
@@ -49,6 +51,9 @@ export function FeedItem({ event, animate = true }: FeedItemProps) {
     <div
       className={[
         'group flex items-start gap-3 px-4 py-1 text-[13px] leading-[1.55]',
+        highlight
+          ? 'mission-event-latest border-y border-[var(--cyan)]/25 bg-[color-mix(in_srgb,var(--cyan)_10%,transparent)]'
+          : '',
         animate ? 'animate-feed-in' : '',
       ].join(' ')}
       style={rowStyle}

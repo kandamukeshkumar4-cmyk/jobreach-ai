@@ -80,7 +80,7 @@ async def download_resume(resume_id: str, db=Depends(get_db)):
         return Response(
             content=docx_bytes,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f'attachment; filename="Mukesh_Kandada_Resume_{resume_id[:8]}.docx"'},
+            headers={"Content-Disposition": f'attachment; filename="Resume_{resume_id[:8]}.docx"'},
         )
     else:
         # It's an external URL — redirect
@@ -111,7 +111,7 @@ async def download_cover_letter(resume_id: str, db=Depends(get_db)):
         return Response(
             content=docx_bytes,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f'attachment; filename="Mukesh_Kandada_CoverLetter_{resume_id[:8]}.docx"'},
+            headers={"Content-Disposition": f'attachment; filename="CoverLetter_{resume_id[:8]}.docx"'},
         )
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=cl_url)

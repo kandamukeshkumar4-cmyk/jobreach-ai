@@ -16,6 +16,8 @@ import { api } from '@/lib/api';
 import { useAppStore } from '@/app/(app)/store';
 import type { ProfileCreate, MissionCreate } from '@/lib/types';
 import { TagsInput } from '@/components/profile/tags-input';
+import { LocationTagsInput } from '@/components/profile/location-tags-input';
+import { SkillsInput, serializeSkills, type SkillEntry } from '@/components/profile/skills-input';
 import { Spinner } from '@/components/ui/spinner';
 
 const PROFILE_ID_KEY = 'jobreach.activeProfileId';
@@ -38,7 +40,7 @@ interface WizardData {
   target_roles: string[];
   target_locations: string[];
   target_salary_min: string;
-  skills: string[];
+  skills: SkillEntry[];
   search_query: string;
   sources: string[];
 }
@@ -53,7 +55,7 @@ function emptyData(): WizardData {
     target_roles: [],
     target_locations: [],
     target_salary_min: '',
-    skills: [],
+    skills: [] as SkillEntry[],
     search_query: '',
     sources: SOURCES.map((s) => s.id),
   };
@@ -180,7 +182,7 @@ export default function OnboardingPage() {
             ? Number(data.target_salary_min)
             : undefined,
           target_salary_currency: 'USD',
-          skills: data.skills,
+          skills: serializeSkills(data.skills),
           years_experience: data.years_experience
             ? Number(data.years_experience)
             : undefined,
@@ -473,23 +475,21 @@ export default function OnboardingPage() {
                 </Field>
                 <Field label="Preferred Locations">
                   <p className="mb-2 text-xs text-[var(--muted)]">
-                    Enter cities, states, or type{' '}
-                    <span className="font-semibold text-[var(--muted2)]">Remote</span> for remote roles.
+                    Pick from suggestions or type a custom location. Use{' '}
+                    <span className="font-semibold text-[var(--muted2)]">Remote</span> for remote-only roles.
                   </p>
-                  <TagsInput
+                  <LocationTagsInput
                     value={data.target_locations}
                     onChange={(v) => update('target_locations', v)}
-                    placeholder="e.g. Remote, New York, London"
                   />
                 </Field>
                 <Field label="Your Top Skills">
                   <p className="mb-2 text-xs text-[var(--muted)]">
-                    Add your strongest skills — these are used to score job matches.
+                    Add up to 10 skills with years of experience — used to score every job match.
                   </p>
-                  <TagsInput
+                  <SkillsInput
                     value={data.skills}
                     onChange={(v) => update('skills', v)}
-                    placeholder="e.g. Python, FastAPI, AWS, Docker"
                   />
                 </Field>
                 <Field label="Minimum Salary (USD)" optional>

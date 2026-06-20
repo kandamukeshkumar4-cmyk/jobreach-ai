@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   Building2,
   MapPin,
@@ -12,7 +13,8 @@ import {
   AlertTriangle,
   Loader2,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, API_BASE } from '@/lib/api';
+import { getAccessToken } from '@/lib/supabase';
 import { formatSalary } from '@/lib/format';
 import type { MatchOut, ResumeTask } from '@/lib/types';
 import { Card } from '@/components/ui/card';
@@ -188,16 +190,33 @@ export function MatchCard({ match }: MatchCardProps) {
     }
   };
 
-  // Auto-download as soon as the DOCX URL is ready
-  useEffect(() => {
-    if (!resumeUrl) return;
-    const a = document.createElement('a');
-    a.href = resumeUrl;
-    a.download = 'Mukesh_Kandada_Resume.docx';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, [resumeUrl]);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (!resumeUrl || downloading) return;
+    setDownloading(true);
+    try {
+      const headers: Record<string, string> = {};
+      try {
+        const token = await getAccessToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+      } catch { /* no auth */ }
+      const res = await fetch(resumeUrl, { headers });
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = 'Resume.docx';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      window.open(resumeUrl, '_blank');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const pollStatus = async (taskId: string) => {
     try {
@@ -366,14 +385,15 @@ export function MatchCard({ match }: MatchCardProps) {
         <div className="mt-4 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--green)_30%,transparent)] bg-[color-mix(in_srgb,var(--green)_10%,transparent)] px-3 py-2 text-xs text-[var(--green)]">
           <Check className="h-3.5 w-3.5 shrink-0" />
           {resumeUrl ? (
-            <a
-              href={resumeUrl}
-              download
-              className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={downloading}
+              className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline disabled:opacity-60"
             >
-              <Download className="h-3.5 w-3.5" />
-              Download resume (.docx)
-            </a>
+              {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              {downloading ? 'Preparing…' : 'Download resume (.docx)'}
+            </button>
           ) : (
             <span className="font-medium">Resume ready</span>
           )}
@@ -439,26 +459,30 @@ export function MatchCard({ match }: MatchCardProps) {
           </Button>
         )}
 
-        <Button
-          variant="secondary"
-          onClick={handleTrack}
-          disabled={trackState !== 'idle'}
-          className="px-3"
-        >
-          {trackState === 'saving' ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : trackState === 'done' ? (
-            <>
+        {trackState === 'done' ? (
+          <Link href="/tracker">
+            <Button variant="secondary" className="px-3">
               <Check className="h-4 w-4 text-[var(--green)]" />
-              Tracked
-            </>
-          ) : (
-            <>
-              <Plus className="h-4 w-4" />
-              Track
-            </>
-          )}
-        </Button>
+              View
+            </Button>
+          </Link>
+        ) : (
+          <Button
+            variant="secondary"
+            onClick={handleTrack}
+            disabled={trackState === 'saving'}
+            className="px-3"
+          >
+            {trackState === 'saving' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                <Plus className="h-4 w-4" />
+                Track
+              </>
+            )}
+          </Button>
+        )}
       </div>
     </Card>
   );
