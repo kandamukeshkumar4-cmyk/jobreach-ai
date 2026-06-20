@@ -434,19 +434,19 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
         client = OpenAI(
             api_key=s.nvidia_api_key,
             base_url="https://integrate.api.nvidia.com/v1",
-            timeout=8.0,
+            timeout=25.0,
         )
 
         msg = client.chat.completions.create(
             model="meta/llama-3.1-8b-instruct",
-            max_tokens=900,
+            max_tokens=1800,
             temperature=0.1,
             messages=[{"role": "user", "content": TAILORING_PROMPT.format(
-                resume_markdown=resume_markdown[:3500],
+                resume_markdown=resume_markdown[:2500],
                 email=profile.get("email", ""),
                 title=job.get("title", ""),
                 company=job.get("company", ""),
-                description=(job.get("description_snippet") or "")[:1800],
+                description=(job.get("description_snippet") or "")[:1200],
             )}],
         )
 
@@ -466,11 +466,11 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
             try:
                 cl_msg = client.chat.completions.create(
                     model="meta/llama-3.1-8b-instruct",
-                    max_tokens=600,
+                    max_tokens=800,
                     temperature=0.1,
                     messages=[{"role": "user", "content": COVER_LETTER_PROMPT.format(
                         tone=tone or "direct",
-                        resume_markdown=resume_markdown[:2500],
+                        resume_markdown=resume_markdown[:1800],
                         title=job.get("title", ""),
                         company=job.get("company", ""),
                         description=(job.get("description_snippet") or "")[:1200],
