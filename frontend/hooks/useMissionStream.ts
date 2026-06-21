@@ -11,14 +11,21 @@ interface MissionStreamResult {
   status: MissionStreamStatus;
 }
 
+const isCompletion = (evt: MissionEventOut): boolean => {
+  const msg = (evt.message ?? '').toLowerCase();
+  if (msg.includes('mission complete')) return true;
+  if (msg.includes('mission failed')) return true;
+  const type = evt.event_type as string;
+  return type === 'done' || type === 'complete' || type === 'end';
+};
+
 /**
- * Subscribes to a mission's SSE stream. The backend replays historical events
- * then streams live ones; each `data:` line is a JSON-encoded MissionEventOut.
+ * Loads mission events in two phases:
+ * 1. REST pre-fetch  → shows events instantly, no "Connecting..." wait
+ * 2. SSE stream      → live events for running missions (deduped by id)
  *
- * - status starts 'connecting', flips to 'running' on the first event.
- * - status becomes 'done' on a completion event (message contains
- *   "Mission complete", or a terminal event_type), and on stream error.
- * - The EventSource is closed on unmount.
+ * For completed missions the REST call shows all history immediately and
+ * the SSE connection is skipped entirely.
  */
 export function useMissionStream(missionId: string): MissionStreamResult {
   const [events, setEvents] = useState<MissionEventOut[]>([]);
@@ -27,51 +34,74 @@ export function useMissionStream(missionId: string): MissionStreamResult {
   useEffect(() => {
     if (!missionId) return;
 
-    // Reset state when the mission changes.
     setEvents([]);
     setStatus('connecting');
 
-    const es = new EventSource(`${API_BASE}/missions/${missionId}/stream`);
+    let cancelled = false;
+    let es: EventSource | null = null;
 
-    const isCompletion = (evt: MissionEventOut): boolean => {
-      const msg = (evt.message ?? '').toLowerCase();
-      if (msg.includes('mission complete')) return true;
-      if (msg.includes('mission failed')) return true;
-      // Some streams emit a synthetic terminal event_type.
-      const type = evt.event_type as string;
-      return type === 'done' || type === 'complete' || type === 'end';
+    const cleanup = () => {
+      cancelled = true;
+      es?.close();
     };
 
-    es.onmessage = (e: MessageEvent) => {
-      if (!e.data) return;
-
-      let parsed: MissionEventOut;
+    (async () => {
+      // ── Phase 1: REST pre-fetch ────────────────────────────────────────────
+      let historical: MissionEventOut[] = [];
       try {
-        parsed = JSON.parse(e.data) as MissionEventOut;
+        const res = await fetch(`${API_BASE}/missions/${missionId}/events`);
+        if (res.ok) historical = (await res.json()) as MissionEventOut[];
       } catch {
-        return; // ignore malformed lines (e.g. keep-alive comments)
+        // network error — fall through to SSE only
       }
 
-      setEvents((prev) => [...prev, parsed]);
-      setStatus((prev) => (prev === 'done' ? prev : 'running'));
+      if (cancelled) return;
 
-      if (isCompletion(parsed)) {
+      if (historical.length > 0) {
+        setEvents(historical);
+        setStatus('running');
+
+        // If the last event is a completion marker, we're already done.
+        if (isCompletion(historical[historical.length - 1])) {
+          setStatus('done');
+          return; // skip SSE entirely for completed missions
+        }
+      }
+
+      // ── Phase 2: SSE for live events ──────────────────────────────────────
+      const seenIds = new Set(historical.map((e) => e.id));
+
+      es = new EventSource(`${API_BASE}/missions/${missionId}/stream`);
+
+      es.onmessage = (e: MessageEvent) => {
+        if (!e.data || cancelled) return;
+        let parsed: MissionEventOut;
+        try {
+          parsed = JSON.parse(e.data) as MissionEventOut;
+        } catch {
+          return;
+        }
+        // Skip events already loaded via REST pre-fetch
+        if (seenIds.has(parsed.id)) return;
+        seenIds.add(parsed.id);
+
+        setEvents((prev) => [...prev, parsed]);
+        setStatus((prev) => (prev === 'done' ? prev : 'running'));
+
+        if (isCompletion(parsed)) {
+          setStatus('done');
+          es?.close();
+        }
+      };
+
+      es.onerror = () => {
+        // Stream closed (mission finished or server dropped connection).
         setStatus('done');
-        es.close();
-      }
-    };
+        es?.close();
+      };
+    })();
 
-    es.onerror = () => {
-      // EventSource auto-reconnects on transient errors, but for our purposes a
-      // stream error after history replay signals the mission is finished (or
-      // the server closed the connection). Treat as done and stop.
-      setStatus('done');
-      es.close();
-    };
-
-    return () => {
-      es.close();
-    };
+    return cleanup;
   }, [missionId]);
 
   return { events, status };

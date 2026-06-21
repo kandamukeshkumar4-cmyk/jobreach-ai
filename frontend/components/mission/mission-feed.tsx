@@ -670,16 +670,89 @@ function EmergingMatches({ starEvents, active }: { starEvents: MissionEventOut[]
 
 // ── Utility rows ──────────────────────────────────────────────────────────────
 
+const JOB_SEARCH_THOUGHTS = [
+  'Scanning Greenhouse for AI Engineer roles...',
+  'Reading job descriptions on Lever boards...',
+  'Checking Ashby for remote-first openings...',
+  'Searching Exa for senior ML positions...',
+  'Scanning SmartRecruiters job boards...',
+  'Reading 100 Exa semantic search results...',
+  'Checking ATS feeds: Greenhouse, Lever, Ashby...',
+  'Scanning RSS feeds from RemoteOK and WeWorkRemotely...',
+  'Checking if Anthropic is hiring AI engineers...',
+  'Reading job post at Grafana Labs...',
+  'Verifying posting at Eigen Labs is still live...',
+  'Checking work visa sponsorship at Coinbase...',
+  'Scanning compensation data for Senior AI Engineer roles...',
+  'Reading 1,184 ATS postings for skill alignment...',
+  'Filtering roles by location: US remote...',
+  'Verifying Mistral AI job listing...',
+  'Checking if Ramp is hiring ML engineers...',
+  'Reading company research: funding, headcount, culture...',
+  'Scanning 88 matched roles for seniority fit...',
+  'Verifying 60 postings are still accepting applications...',
+  'Pruning closed and expired job listings...',
+  'Cross-referencing your Python skills with JD requirements...',
+  'Scoring roles by profile alignment...',
+  'Researching top companies for culture signals...',
+  'Ranking your best matches by composite score...',
+];
+
+/** Claude-style typewriter: types a phrase, holds, deletes, types the next. */
+function AgentTypewriter({ size = 'md' }: { size?: 'sm' | 'md' }) {
+  const [displayed, setDisplayed] = useState('');
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * JOB_SEARCH_THOUGHTS.length));
+  const [phase, setPhase] = useState<'typing' | 'pause' | 'deleting'>('typing');
+
+  useEffect(() => {
+    const target = JOB_SEARCH_THOUGHTS[idx];
+    if (phase === 'typing') {
+      if (displayed.length < target.length) {
+        const t = setTimeout(() => setDisplayed(target.slice(0, displayed.length + 1)), 36);
+        return () => clearTimeout(t);
+      }
+      const t = setTimeout(() => setPhase('pause'), 1400);
+      return () => clearTimeout(t);
+    }
+    if (phase === 'pause') {
+      const t = setTimeout(() => setPhase('deleting'), 300);
+      return () => clearTimeout(t);
+    }
+    if (phase === 'deleting') {
+      if (displayed.length > 0) {
+        const t = setTimeout(() => setDisplayed((d) => d.slice(0, -1)), 16);
+        return () => clearTimeout(t);
+      }
+      setIdx((i) => (i + 1) % JOB_SEARCH_THOUGHTS.length);
+      setPhase('typing');
+    }
+  }, [displayed, phase, idx]);
+
+  const isSmall = size === 'sm';
+  return (
+    <span
+      className={isSmall ? 'text-[11px] text-[var(--muted2)]' : 'text-[12px] text-[var(--muted2)]'}
+      style={{ fontFamily: 'var(--font-mono)' }}
+    >
+      {displayed}
+      <span
+        className={[
+          'ml-[2px] inline-block translate-y-[1px] bg-[var(--cyan)] mission-cursor',
+          isSmall ? 'h-[11px] w-[5px]' : 'h-[13px] w-[6px]',
+        ].join(' ')}
+      />
+    </span>
+  );
+}
+
 function ConnectingState() {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
       <AgentOrb state="running" size={14} />
       <p className="text-[13px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
         Connecting to agent...
       </p>
-      <p className="max-w-xs text-[11px] text-[var(--muted)]">
-        The agent may take up to 30 seconds to spin up on a cold start.
-      </p>
+      <AgentTypewriter />
     </div>
   );
 }
@@ -690,19 +763,22 @@ function IdleEmptyState() {
       <p className="text-[13px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
         No events yet.
       </p>
-      <p className="max-w-xs text-[11px] text-[var(--muted)]">
-        The console will light up as soon as the backend emits the first event.
-      </p>
+      <AgentTypewriter size="sm" />
     </div>
   );
 }
 
 function ThinkingRow() {
   return (
-    <div className="flex items-center gap-3 px-4 py-1 text-[13px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>
-      <span className="select-none tabular-nums opacity-0" aria-hidden="true">00:00:00</span>
-      <span className="mission-cursor inline-block h-3.5 w-[7px] bg-[var(--cyan)]" />
-      <span>agent is still searching</span>
+    <div
+      className="flex items-center gap-3 px-4 py-1.5"
+      style={{ fontFamily: 'var(--font-mono)' }}
+    >
+      <span className="select-none tabular-nums opacity-0 text-[11px]" aria-hidden="true">
+        00:00:00
+      </span>
+      <span className="mission-cursor inline-block h-3.5 w-[7px] shrink-0 bg-[var(--cyan)]" />
+      <AgentTypewriter size="sm" />
     </div>
   );
 }
