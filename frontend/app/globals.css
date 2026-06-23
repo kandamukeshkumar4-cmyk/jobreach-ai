@@ -21,6 +21,13 @@
   --color-foreground: var(--text);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-jetbrains-mono), 'JetBrains Mono', var(--font-geist-mono), monospace;
+  /* Landing-page typography (Figma design) */
+  --font-display: var(--font-manrope), 'Manrope', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* DM Sans body font, scoped to the landing page wrapper */
+.landing-root {
+  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 body {
