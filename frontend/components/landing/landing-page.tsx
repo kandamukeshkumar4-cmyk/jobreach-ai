@@ -130,277 +130,209 @@ function SectionIndicator({ label }: { label: string }) {
   );
 }
 
-/* 7. HeroVideoCard — beam video background + premium dashboard overlay */
+/* 7. HeroAgentCard — auto-running terminal animation, no video */
 function HeroVideoCard() {
-  const ref = useRef<HTMLVideoElement>(null);
+  const [events,  setEvents]  = useState<typeof AGENT_EVENTS>([]);
+  const [running, setRunning] = useState(false);
+  const [scanned, setScanned] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const feedRef  = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const v = ref.current;
-    if (!v) return;
-    const LOOP_START = 3.5;
-    const LOOP_END   = 6.0;
-    const onLoaded = () => { v.currentTime = LOOP_START; v.play().catch(() => {}); };
-    const onTime   = () => { if (v.currentTime >= LOOP_END) v.currentTime = LOOP_START; };
-    v.addEventListener('loadedmetadata', onLoaded);
-    v.addEventListener('timeupdate', onTime);
-    if (v.readyState >= 1) onLoaded();
-    return () => {
-      v.removeEventListener('loadedmetadata', onLoaded);
-      v.removeEventListener('timeupdate', onTime);
+    const runCycle = () => {
+      setEvents([]); setScanned(0); setRunning(true);
+      let i = 0, count = 0;
+      timerRef.current = setInterval(() => {
+        if (i >= AGENT_EVENTS.length) {
+          clearInterval(timerRef.current); setRunning(false);
+          setTimeout(runCycle, 2800);
+          return;
+        }
+        const ev = AGENT_EVENTS[i];
+        setEvents(p => [...p, ev]);
+        if (ev.type === 'scan') count = Math.min(count + Math.floor(Math.random() * 90 + 55), 627);
+        setScanned(count);
+        if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
+        i++;
+      }, 270);
     };
+    const t = setTimeout(runCycle, 700);
+    return () => { clearTimeout(t); clearInterval(timerRef.current); };
   }, []);
 
-  const jobs = [
-    { title: 'Senior AI Engineer',    co: 'OpenAI',     pct: 96, fit: 'Excellent fit', status: 'Matched',   sC: '#3b82f6', domain: 'openai.com',    tags: ['Full-time','Remote','AI Platform'],       ago: '2h' },
-    { title: 'Staff Backend Engineer',co: 'Anthropic',  pct: 92, fit: 'Excellent fit', status: 'Tailored',  sC: '#06b6d4', domain: 'anthropic.com',  tags: ['Full-time','San Francisco','Backend'],    ago: '5h' },
-    { title: 'ML Engineer',           co: 'Meta',       pct: 88, fit: 'Great fit',     status: 'Applied',   sC: '#8b5cf6', domain: 'meta.com',       tags: ['Full-time','Menlo Park','ML Systems'],    ago: '1d' },
-    { title: 'Applied ML Scientist',  co: 'Google',     pct: 85, fit: 'Great fit',     status: 'Interview', sC: '#f59e0b', domain: 'google.com',     tags: ['Full-time','Mountain View','Research'],   ago: '2d' },
-    { title: 'Data Scientist',        co: 'Microsoft',  pct: 78, fit: 'Good fit',      status: 'Scanned',   sC: '#6b7280', domain: 'microsoft.com',  tags: ['Full-time','Redmond','Data Science'],     ago: '2d' },
-  ];
-  const feed = [
-    { text: 'Scanning job boards...',           ago: 'Just now', c: '#06b6d4' },
-    { text: 'Found 24 new high-match roles',    ago: '1m ago',   c: '#10b981' },
-    { text: 'Analyzing role requirements',      ago: '2m ago',   c: '#06b6d4' },
-    { text: 'Tailoring resume for 3 roles',     ago: '4m ago',   c: '#8b5cf6' },
-    { text: 'Auto-applying to 2 roles',         ago: '6m ago',   c: '#10b981' },
-  ];
-  const tabs  = ['All', 'Scanned', 'Matched', 'Tailored', 'Applied', 'Interview', 'Offer'];
-  const stats = [
-    { label: 'Roles scanned', val: '1,842', delta: '+24%' },
-    { label: 'Top matches',   val: '127',   delta: '+18%' },
-    { label: 'Applications',  val: '38',    delta: '+12%' },
-    { label: 'Interviews',    val: '6',     delta: '+20%' },
-    { label: 'Offers',        val: '2',     delta: '+100%' },
-  ];
-  const nav = ['Home', 'Pipeline', 'AI Agent', 'Research', 'Applications', 'Jobs', 'Contacts'];
-  const pC  = (p: number) => p >= 90 ? '#10b981' : p >= 80 ? '#22d3ee' : '#f59e0b';
-  const dots = (p: number) => Math.round(p / 20);
+  const hasVerified = events.some(e => e.type === 'verify');
+  const hasMatch    = events.some(e => e.type === 'match');
 
   return (
-    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+    <div style={{ position: 'absolute', inset: 0, background: 'rgb(5,5,6)' }}>
 
-      {/* ── Beam video background ── */}
-      <video ref={ref} src="/agent-demo.mp4" muted playsInline loop
-        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '120%',
-          objectFit: 'cover', objectPosition: '60% 5%' }} />
+      {/* subtle dot-grid texture */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none',
+        backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.028) 1px, transparent 1px)',
+        backgroundSize: '28px 28px' }} />
 
-      {/* ── Premium dashboard overlay ── */}
+      {/* ── Agent terminal card ── */}
       <motion.div
-        initial={{ opacity: 0, x: 80, scale: 0.96 }}
-        animate={{ opacity: 1, x: 0, scale: 1 }}
-        transition={{ duration: 1.1, delay: 0.72, ease: [0.76, 0, 0.24, 1] }}
-        style={{ position: 'absolute', right: 0, top: '54%', transform: 'translateY(-50%)',
-          width: '70%', maxWidth: 980,
-          background: 'rgba(7,7,11,0.82)',
-          borderRadius: '18px 0 0 18px',
-          border: '1px solid rgba(255,255,255,0.11)',
+        initial={{ opacity: 0, x: 60 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 1.0, delay: 0.5, ease: [0.76, 0, 0.24, 1] }}
+        style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)',
+          width: '60%', maxWidth: 840,
+          background: 'rgb(10,10,14)',
+          borderRadius: '24px 0 0 24px',
+          border: '1px solid rgba(255,255,255,0.1)',
           borderRight: 'none',
-          backdropFilter: 'blur(28px)',
-          boxShadow: '-40px 0 100px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04)',
-          display: 'flex', overflow: 'hidden', height: 520 }}>
+          boxShadow: '-40px 0 100px rgba(0,0,0,0.9)',
+          overflow: 'hidden', height: 540, zIndex: 4 }}>
 
-        {/* ── SIDEBAR ── */}
-        <div style={{ width: 150, flexShrink: 0, borderRight: '1px solid rgba(255,255,255,0.07)',
-          background: 'rgba(255,255,255,0.015)', display: 'flex', flexDirection: 'column',
-          padding: '18px 0' }}>
-          {/* logo */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 14px 18px',
-            borderBottom: '1px solid rgba(255,255,255,0.07)', marginBottom: 10 }}>
-            <div style={{ width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg,#3b82f6,#06b6d4)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 11, fontWeight: 800, color: '#fff' }}>J</div>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.88)' }}>JobReach <span style={{ color: '#06b6d4' }}>AI</span></span>
+        {/* Chrome header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px',
+          borderBottom: '1px solid rgba(255,255,255,0.07)',
+          background: 'rgba(255,255,255,0.02)' }}>
+          <div style={{ display: 'flex', gap: 5 }}>
+            {(['#ff5f57','#ffbd2e','#28c840'] as const).map(c => (
+              <div key={c} style={{ width: 10, height: 10, borderRadius: '50%', background: c }} />
+            ))}
           </div>
-          {/* nav */}
-          {nav.map((item) => (
-            <div key={item} style={{ display: 'flex', alignItems: 'center', gap: 9,
-              padding: '7px 14px', margin: '1px 8px', borderRadius: 7, cursor: 'default',
-              background: item === 'Pipeline' ? 'rgba(59,130,246,0.15)' : 'transparent',
-              borderLeft: item === 'Pipeline' ? '2px solid #3b82f6' : '2px solid transparent' }}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                background: item === 'Pipeline' ? '#3b82f6' : 'rgba(255,255,255,0.2)' }} />
-              <span style={{ fontSize: 11, color: item === 'Pipeline' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.42)',
-                fontWeight: item === 'Pipeline' ? 600 : 400 }}>{item}</span>
-            </div>
-          ))}
-          {/* pro plan badge */}
-          <div style={{ marginTop: 'auto', margin: '12px 10px 0',
-            padding: '10px 10px', borderRadius: 10,
-            border: '1px solid rgba(99,102,241,0.25)',
-            background: 'rgba(99,102,241,0.08)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <span style={{ fontSize: 9, color: '#818cf8' }}>⚡</span>
-              <span style={{ fontSize: 10, fontWeight: 700, color: '#818cf8' }}>Pro Plan</span>
-            </div>
-            <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', lineHeight: 1.4 }}>Renews Jun 20, 2025</div>
+          <span style={{ flex: 1, textAlign: 'center', fontSize: 11, letterSpacing: '0.02em',
+            color: 'rgba(255,255,255,0.35)', fontFamily: 'var(--font-mono)' }}>
+            jobreach · mission-runner · live
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div className="animate-pulse" style={{ width: 6, height: 6, borderRadius: '50%',
+              background: '#10b981', boxShadow: '0 0 6px #10b981' }} />
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#10b981',
+              fontFamily: 'var(--font-mono)', letterSpacing: '0.12em' }}>ACTIVE</span>
           </div>
         </div>
 
-        {/* ── MAIN CONTENT ── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {/* Body */}
+        <div style={{ display: 'flex', height: 'calc(100% - 40px)' }}>
 
-          {/* pipeline header */}
-          <div style={{ padding: '14px 16px 0', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <span style={{ fontSize: 16, fontWeight: 700, color: 'rgba(255,255,255,0.92)', letterSpacing: '-0.02em' }}>Pipeline</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', padding: '3px 10px',
-                  border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6 }}>⊟ Filters</span>
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)', padding: '3px 8px',
-                  border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6 }}>+</span>
+          {/* LEFT: orb + stats */}
+          <div style={{ width: 220, flexShrink: 0, borderRight: '1px solid rgba(255,255,255,0.07)',
+            padding: '24px 18px', display: 'flex', flexDirection: 'column' }}>
+
+            {/* Orb */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 24 }}>
+              <div style={{ position: 'relative', width: 110, height: 110 }}>
+                {[0, 0.55, 1.1].map((d, i) => (
+                  <div key={i} style={{ position: 'absolute', inset: 0, borderRadius: '50%',
+                    border: `1px solid ${running ? 'rgba(94,198,255,0.22)' : 'rgba(255,255,255,0.06)'}`,
+                    animation: running ? `pulse-ring 2.6s ease-out ${d}s infinite` : 'none' }} />
+                ))}
+                <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', overflow: 'hidden',
+                  animation: running ? 'radar-sweep 3.5s linear infinite' : 'none' }}>
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%',
+                    background: running
+                      ? 'conic-gradient(from 0deg, transparent 260deg, rgba(94,198,255,0.14) 360deg)'
+                      : 'transparent' }} />
+                </div>
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 13, height: 13, borderRadius: '50%', transition: 'all 0.7s',
+                    background: running ? '#5ec6ff' : '#2a2a30',
+                    boxShadow: running ? '0 0 24px 6px rgba(94,198,255,0.55)' : 'none' }} />
+                </div>
+                <div style={{ position: 'absolute', bottom: -24, left: 0, right: 0, textAlign: 'center',
+                  fontSize: 9, fontFamily: 'var(--font-mono)', letterSpacing: '0.16em',
+                  color: running ? '#5ec6ff' : '#3a3a42' }}>
+                  {running ? 'SCANNING' : 'READY'}
+                </div>
               </div>
             </div>
-            {/* tabs */}
-            <div style={{ display: 'flex', gap: 0 }}>
-              {tabs.map((tab, i) => (
-                <span key={tab} style={{ fontSize: 11, padding: '5px 11px', cursor: 'default',
-                  color: i === 0 ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.35)',
-                  borderBottom: i === 0 ? '2px solid #3b82f6' : '2px solid transparent',
-                  fontWeight: i === 0 ? 600 : 400, marginBottom: -1 }}>{tab}</span>
+
+            {/* Big number */}
+            <div style={{ textAlign: 'center', marginBottom: 20, marginTop: 6 }}>
+              <div style={{ fontSize: 44, fontWeight: 800, color: 'rgba(255,255,255,0.92)',
+                lineHeight: 1, letterSpacing: '-0.04em' }}>
+                {scanned ? scanned.toLocaleString() : '—'}
+              </div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.32)', marginTop: 4 }}>roles scanned</div>
+              {hasMatch && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: '#10b981', letterSpacing: '-0.02em' }}>
+                    B · 4.3/5
+                  </div>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.28)', marginTop: 2 }}>top match grade</div>
+                </motion.div>
+              )}
+            </div>
+
+            {/* Stats */}
+            <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: 14,
+              display: 'flex', flexDirection: 'column', gap: 12, marginTop: 'auto' }}>
+              {[
+                { label: 'Scanned',   val: scanned ? scanned.toLocaleString() : '—' },
+                { label: 'Verified',  val: hasVerified ? '60' : '—' },
+                { label: 'Top match', val: hasMatch ? 'B · 4.3/5' : '—' },
+                { label: 'Events',    val: String(events.length) },
+              ].map(row => (
+                <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)', fontFamily: 'var(--font-mono)' }}>{row.label}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.82)',
+                    fontFamily: 'var(--font-mono)' }}>{row.val}</span>
+                </div>
               ))}
             </div>
           </div>
 
-          {/* stats cards */}
-          <div style={{ display: 'flex', gap: 10, padding: '12px 16px',
-            borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-            {stats.map((s) => (
-              <div key={s.label} style={{ flex: 1, padding: '8px 10px', borderRadius: 10,
-                border: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.03)' }}>
-                <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.38)', marginBottom: 4 }}>{s.label}</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: 'rgba(255,255,255,0.9)', lineHeight: 1 }}>{s.val}</div>
-                <div style={{ fontSize: 9, color: '#10b981', marginTop: 3 }}>{s.delta} this week</div>
-              </div>
-            ))}
-          </div>
+          {/* RIGHT: event feed */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '10px 16px',
+              borderBottom: '1px solid rgba(255,255,255,0.07)',
+              background: 'rgba(255,255,255,0.015)' }}>
+              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'var(--font-mono)',
+                letterSpacing: '0.12em' }}>AGENT · LIVE FEED</span>
+              {running && (
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div className="animate-pulse" style={{ width: 6, height: 6, borderRadius: '50%', background: '#06b6d4' }} />
+                  <span style={{ fontSize: 10, color: '#06b6d4', fontFamily: 'var(--font-mono)', letterSpacing: '0.12em' }}>LIVE</span>
+                </div>
+              )}
+            </div>
 
-          {/* job rows */}
-          <div style={{ flex: 1, overflowY: 'hidden' }}>
-            {jobs.map((j, i) => (
-              <motion.div key={j.title}
-                initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.4, delay: 1.0 + i * 0.07 }}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
-                  borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'default',
-                  background: i === 0 ? 'rgba(59,130,246,0.04)' : 'transparent' }}>
-                {/* company logo */}
-                <div style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0,
-                  overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)',
-                  background: 'rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <img src={`https://www.google.com/s2/favicons?domain=https://${j.domain}&sz=64`}
-                    alt={j.co} width={24} height={24} style={{ width: 24, height: 24, objectFit: 'contain' }}
-                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
-                </div>
-                {/* title + company */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.88)',
-                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{j.title}</div>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 1 }}>{j.co}</div>
-                </div>
-                {/* % score + fit */}
-                <div style={{ flexShrink: 0, textAlign: 'right', marginRight: 4 }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: pC(j.pct), lineHeight: 1 }}>{j.pct}%</div>
-                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>{j.fit}</div>
-                  <div style={{ display: 'flex', gap: 2, marginTop: 3, justifyContent: 'flex-end' }}>
-                    {[1,2,3,4,5].map(d => (
-                      <div key={d} style={{ width: 9, height: 3, borderRadius: 2,
-                        background: d <= dots(j.pct) ? pC(j.pct) : 'rgba(255,255,255,0.1)' }} />
-                    ))}
-                  </div>
-                </div>
-                {/* status badge */}
-                <div style={{ flexShrink: 0 }}>
-                  <span style={{ fontSize: 9.5, padding: '3px 9px', borderRadius: 20, fontWeight: 600,
-                    background: j.sC + '1a', border: `1px solid ${j.sC}50`, color: j.sC }}>
-                    ● {j.status}
+            <div ref={feedRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 16px',
+              display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {events.length === 0 && (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.18)', fontFamily: 'var(--font-mono)' }}>
+                    Initializing agent...
                   </span>
                 </div>
-                {/* tags */}
-                <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-                  {j.tags.map((t) => (
-                    <span key={t} style={{ fontSize: 9.5, padding: '2px 7px', borderRadius: 5,
-                      background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.4)' }}>{t}</span>
-                  ))}
+              )}
+              <AnimatePresence>
+                {events.map((ev, i) => {
+                  const meta = EVENT_META[ev.type];
+                  return (
+                    <motion.div key={ev.id}
+                      initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.22 }}
+                      style={{ display: 'flex', alignItems: 'baseline', gap: 10,
+                        fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                      <span style={{ color: 'rgba(255,255,255,0.22)', width: 24, flexShrink: 0, textAlign: 'right' }}>
+                        {String(i + 1).padStart(2, '0')}
+                      </span>
+                      <span style={{ padding: '1.5px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700, flexShrink: 0,
+                        color: meta.color, background: `${meta.color}18` }}>
+                        {meta.label}
+                      </span>
+                      <span style={{ color: 'rgba(255,255,255,0.65)', flex: 1, lineHeight: 1.5 }}>{ev.text}</span>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
+              {running && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ color: 'rgba(255,255,255,0.22)', width: 24, textAlign: 'right',
+                    fontFamily: 'var(--font-mono)' }}>›</span>
+                  <span style={{ display: 'inline-block', width: 8, height: 14, background: 'rgba(255,255,255,0.5)',
+                    animation: 'blink 1s step-end infinite' }} />
                 </div>
-                {/* time */}
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.22)', flexShrink: 0 }}>{j.ago} ago</span>
-              </motion.div>
-            ))}
-            {/* view all */}
-            <div style={{ padding: '10px 16px', textAlign: 'center' }}>
-              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', cursor: 'default' }}>View all pipeline ↓</span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* ── AI AGENT PANEL ── */}
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          transition={{ duration: 0.8, delay: 1.1 }}
-          style={{ width: 230, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.07)',
-            background: 'rgba(255,255,255,0.015)', display: 'flex', flexDirection: 'column',
-            padding: '16px 14px', gap: 14 }}>
-
-          {/* header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.88)' }}>AI Agent</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <div className="animate-pulse" style={{ width: 6, height: 6, borderRadius: '50%',
-                background: '#10b981', boxShadow: '0 0 6px #10b981' }} />
-              <span style={{ fontSize: 9.5, color: '#10b981', fontWeight: 700 }}>Active</span>
-            </div>
-          </div>
-
-          {/* circle + big numbers */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-            {/* SVG circle indicator */}
-            <div style={{ position: 'relative', width: 100, height: 100 }}>
-              <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
-                <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(6,182,212,0.12)" strokeWidth="6" />
-                <circle cx="50" cy="50" r="42" fill="none" stroke="#06b6d4" strokeWidth="6"
-                  strokeDasharray="264" strokeDashoffset="26" strokeLinecap="round"
-                  style={{ filter: 'drop-shadow(0 0 6px #06b6d4)' }} />
-              </svg>
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#06b6d4',
-                  boxShadow: '0 0 14px #06b6d4, 0 0 30px rgba(6,182,212,0.4)' }} />
-              </div>
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 32, fontWeight: 800, color: 'rgba(255,255,255,0.95)', lineHeight: 1, letterSpacing: '-0.03em' }}>1,842</div>
-              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 3 }}>roles scanned</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: '#10b981', marginTop: 8, letterSpacing: '-0.02em' }}>A+ 4.6<span style={{ fontSize: 13, fontWeight: 600 }}>/5</span></div>
-              <div style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>top match grade</div>
-            </div>
-          </div>
-
-          {/* live feed */}
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontSize: 10, fontWeight: 600, color: 'rgba(255,255,255,0.55)' }}>Live feed</span>
-              <span style={{ fontSize: 9.5, color: '#06b6d4', cursor: 'default' }}>View all</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-              {feed.map((f, i) => (
-                <motion.div key={f.text}
-                  initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.35, delay: 1.3 + i * 0.1 }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                    background: f.c, boxShadow: `0 0 6px ${f.c}` }} />
-                  <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', flex: 1 }}>{f.text}</span>
-                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', flexShrink: 0 }}>{f.ago}</span>
-                </motion.div>
-              ))}
-            </div>
-          </div>
-
-          {/* CTA button */}
-          <button style={{ width: '100%', padding: '10px 0', borderRadius: 10, cursor: 'default',
-            background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
-            border: 'none', fontSize: 11, fontWeight: 700, color: '#fff', letterSpacing: '0.02em',
-            boxShadow: '0 4px 20px rgba(59,130,246,0.35)' }}>
-            Open AI Agent ✦
-          </button>
-        </motion.div>
 
       </motion.div>
     </div>
@@ -661,15 +593,11 @@ export function LandingPage() {
 
         {/* ═══ HERO — full-viewport video + text overlay ═══ */}
         <section id="top" ref={heroRef}
-          style={{ position: 'relative', width: '100vw', height: '140vh', overflow: 'hidden', background: 'var(--bg)' }}>
+          style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', background: 'var(--bg)' }}>
 
           {/* video fills entire section */}
           <HeroVideoCard />
 
-          {/* dark left scrim — opaque behind text, fades early to expose dashboard */}
-          <div style={{ pointerEvents: 'none', position: 'absolute', inset: 0,
-            background: 'linear-gradient(to right, rgba(5,5,6,0.98) 0%, rgba(5,5,6,0.98) 28%, rgba(5,5,6,0.55) 42%, rgba(5,5,6,0.08) 56%, transparent 66%)',
-            zIndex: 1 }} />
 
           {/* bottom fade into next section */}
           <div style={{ pointerEvents: 'none', position: 'absolute', bottom: 0, left: 0, right: 0, height: '160px',
