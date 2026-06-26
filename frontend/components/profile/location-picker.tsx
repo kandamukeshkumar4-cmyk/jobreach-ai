@@ -172,7 +172,7 @@ export function LocationPicker({ value, onChange, disabled = false }: LocationPi
       {/* Tags + input row */}
       <div
         className={cn(
-          'flex flex-wrap items-center gap-2 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 transition-colors focus-within:border-[var(--border-bright)]',
+          'flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-bright)] bg-[var(--card)] px-3 py-2 transition-colors focus-within:border-[var(--blue)] focus-within:ring-2 focus-within:ring-[var(--blue)]/30',
           disabled && 'opacity-60',
         )}
         onClick={() => inputRef.current?.focus()}
@@ -180,7 +180,7 @@ export function LocationPicker({ value, onChange, disabled = false }: LocationPi
         {value.map((loc, i) => (
           <span
             key={`${loc}-${i}`}
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--border-bright)] bg-[var(--surface)] py-1 pl-2.5 pr-1.5 text-xs font-medium text-[var(--text)]"
+            className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--border)] bg-white/[0.06] py-1 pl-2.5 pr-1.5 text-xs font-medium text-[var(--text)]"
           >
             <MapPin className="h-3 w-3 text-[var(--cyan)]" />
             {loc}
@@ -218,7 +218,7 @@ export function LocationPicker({ value, onChange, disabled = false }: LocationPi
         <ul
           ref={listRef}
           role="listbox"
-          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-auto rounded-[8px] border border-[var(--border)] bg-[var(--surface)] py-1 shadow-lg"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-auto rounded-[var(--radius-md)] border border-[var(--border-bright)] bg-[var(--surface)] py-1 shadow-lg"
         >
           {suggestions.map((s, idx) => (
             <li

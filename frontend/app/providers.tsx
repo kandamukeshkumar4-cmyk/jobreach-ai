@@ -1,6 +1,7 @@
 'use client';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { SmoothScroll } from '@/components/ui/smooth-scroll';
 import type { ReactNode } from 'react';
 
 // Module-level client so it is created once per browser session and survives
@@ -18,6 +19,8 @@ const queryClient = new QueryClient({
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <SmoothScroll>{children}</SmoothScroll>
+    </QueryClientProvider>
   );
 }

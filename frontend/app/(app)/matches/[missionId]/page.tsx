@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, RotateCw, ArrowLeft, Target } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { Grade, MatchOut } from '@/lib/types';
-import { Card } from '@/components/ui/card';
+import { LiquidGlassCard as Card } from '@/components/ui/liquid-glass';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { MatchCard } from '@/components/match/match-card';

@@ -216,7 +216,7 @@ function ResumeCard({ doc }: { doc: ResumeDoc }) {
   const initial = (application.company || '?')[0].toUpperCase();
 
   return (
-    <div className="group flex flex-col overflow-hidden rounded-xl border border-[var(--border-bright)] bg-[color-mix(in_srgb,var(--card)_82%,transparent)] transition-all duration-200 hover:border-[color-mix(in_srgb,var(--cyan)_40%,var(--border-bright))] hover:shadow-[0_0_32px_rgba(34,211,238,0.08)]">
+    <div className="group flex flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border-bright)] bg-[color-mix(in_srgb,var(--card)_82%,transparent)] transition-all duration-200 hover:border-[color-mix(in_srgb,var(--cyan)_40%,var(--border-bright))] hover:shadow-[0_0_32px_color-mix(in_srgb,var(--cyan)_8%,transparent)]">
       {/* Top accent */}
       <div className="h-[2px] w-full" style={{ background: `linear-gradient(90deg, ${color}, transparent)` }} />
 

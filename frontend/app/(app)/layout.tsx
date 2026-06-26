@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { LayoutDashboard, Rocket, Target, ListChecks, FileText, User, LogOut, Plus } from 'lucide-react'
+import { MetalLink } from '@/components/ui/metal-button'
 import { useAppStore } from './store'
 import type { ReactNode } from 'react'
 import { useState, useEffect } from 'react'
@@ -72,10 +73,10 @@ function Sidebar() {
     <div className="fixed left-0 top-0 z-50 h-screen w-[240px] border-r border-[var(--border)] bg-[var(--surface)] flex flex-col">
       <div className="px-6 pt-8 pb-6 border-b border-[var(--border)]">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded bg-[var(--cyan)] flex items-center justify-center">
-            <span className="text-[#07071a] text-xs font-bold">JR</span>
+          <div className="w-7 h-7 rounded-[7px] bg-prismatic flex items-center justify-center shadow-[var(--glow-blue)]">
+            <span className="text-[var(--bg)] text-xs font-bold">JR</span>
           </div>
-          <span className="font-semibold text-2xl tracking-[-1.5px] text-white">JobReach</span>
+          <span className="font-display font-semibold text-2xl tracking-[-1.5px] text-[var(--text)]">JobReach</span>
         </div>
       </div>
 
@@ -88,15 +89,15 @@ function Sidebar() {
               <li key={item.href}>
                 <Link
                   href={item.href}
-                  className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive
-                    ? 'bg-[var(--card)] text-[var(--cyan)]'
-                    : 'text-[var(--muted2)] hover:text-[var(--text)] hover:bg-[var(--card)]'
+                  className={`relative flex items-center gap-3 px-4 py-2.5 rounded-[var(--radius-md)] text-sm font-medium transition-colors ${isActive
+                    ? 'bg-white/[0.06] text-[var(--cyan)] shadow-[inset_2px_0_0_var(--cyan),0_0_18px_rgba(94,198,255,0.08)] before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[2px] before:-translate-y-1/2 before:rounded-full before:bg-[var(--cyan)]'
+                    : 'text-[var(--muted2)] hover:text-[var(--text)] hover:bg-white/[0.04]'
                   }`}
                 >
                   <Icon className="w-4 h-4" />
                   {item.label}
                   {item.label === 'Missions' && runningMissions > 0 && (
-                    <span className="ml-auto px-2 py-0.5 text-[10px] font-mono bg-[var(--cyan)] text-[#07071a] rounded-full">
+                    <span className="ml-auto px-2 py-0.5 text-[10px] font-[family-name:var(--font-mono)] bg-prismatic text-[var(--bg)] rounded-[var(--radius-pill)]">
                       {runningMissions}
                     </span>
                   )}
@@ -108,8 +109,8 @@ function Sidebar() {
       </nav>
 
       <div className="p-4 border-t border-[var(--border)] mt-auto">
-        <div className="flex items-center gap-3 px-3 py-3 bg-[var(--card)] rounded-2xl">
-          <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center text-xs font-mono ring-1 ring-[var(--border-bright)]">
+        <div className="flex items-center gap-3 px-3 py-3 bg-[var(--card)] border border-[var(--border)] rounded-[var(--radius-lg)]">
+          <div className="w-8 h-8 rounded-full bg-prismatic flex items-center justify-center text-xs font-[family-name:var(--font-mono)] text-[var(--bg)] ring-1 ring-[var(--border-bright)]">
             {initials || <span className="w-3 h-3 rounded-full bg-[var(--muted)] opacity-40" />}
           </div>
           <div className="text-sm min-w-0">
@@ -125,7 +126,7 @@ function Sidebar() {
         </div>
         <button
           onClick={handleSignOut}
-          className="mt-4 flex w-full items-center justify-center gap-2 px-4 py-2 text-[var(--muted)] hover:text-[var(--red)] hover:bg-[var(--card)] rounded-xl text-sm font-medium transition-colors"
+          className="mt-4 flex w-full items-center justify-center gap-2 px-4 py-2 text-[var(--muted)] hover:text-[var(--red)] hover:bg-[var(--card)] rounded-[var(--radius-md)] text-sm font-medium transition-colors"
         >
           <LogOut className="w-4 h-4" />
           Sign out
@@ -150,17 +151,14 @@ function Topbar() {
 
   return (
     <div className="fixed left-[240px] right-0 top-0 z-40 h-16 border-b border-[var(--border)] bg-[var(--surface)] flex items-center px-8">
-      <h1 className="text-2xl font-semibold tracking-[-1px] text-[var(--text)]">
+      <h1 className="font-display text-2xl font-semibold tracking-[-1px] text-[var(--text)]">
         {getTitle(pathname)}
       </h1>
       <div className="ml-auto">
-        <Link
-          href="/missions/new"
-          className="flex items-center gap-2 px-5 py-2 bg-[var(--cyan)] hover:bg-[#67e8f9] text-[#07071a] font-semibold text-sm rounded-xl transition-colors"
-        >
+        <MetalLink href="/missions/new" size="sm">
           <Plus className="w-4 h-4" />
           New Mission
-        </Link>
+        </MetalLink>
       </div>
     </div>
   )
@@ -217,11 +215,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
         <div className="flex flex-col items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--cyan)]">
-            <span className="text-sm font-bold text-[#07071a]">JR</span>
+          <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] bg-prismatic shadow-[var(--glow-blue)]">
+            <span className="text-sm font-bold text-[var(--bg)]">JR</span>
           </div>
           <div className="h-1 w-32 overflow-hidden rounded-full bg-[var(--border)]">
-            <div className="h-full w-1/2 animate-pulse rounded-full bg-[var(--cyan)]" />
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-prismatic" />
           </div>
         </div>
       </div>

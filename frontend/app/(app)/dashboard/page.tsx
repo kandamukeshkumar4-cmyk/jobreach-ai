@@ -16,11 +16,12 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import type { ApplicationOut, MissionOut, TrackerStats } from '@/lib/types';
-import { Card } from '@/components/ui/card';
+import { LiquidGlassCard as Card } from '@/components/ui/liquid-glass';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
+import { MetalLink } from '@/components/ui/metal-button';
 
 const CLOSED_STATUSES = new Set(['rejected', 'discarded', 'skip']);
 
@@ -54,9 +55,9 @@ function StatCard({
   href?: string;
 }) {
   const inner = (
-    <Card className="group p-5 transition-colors hover:border-[var(--border-bright)]">
+    <Card className="group p-5 elevation-product transition-all hover:translate-y-[-1px]">
       <div className="flex items-start justify-between">
-        <span className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">
+        <span className="font-[family-name:var(--font-mono)] text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
           {label}
         </span>
         <span
@@ -69,7 +70,7 @@ function StatCard({
           <Icon className="h-4 w-4" />
         </span>
       </div>
-      <div className="mt-4 font-mono text-3xl font-bold tracking-[-1px] text-[var(--text)]">
+      <div className="mt-4 font-display text-3xl font-bold tracking-[-1px] text-[var(--text)]">
         {value}
       </div>
       {href && (
@@ -187,7 +188,7 @@ function GettingStartedCard({ steps }: { steps: GettingStartedStep[] }) {
       <div className="border-b border-[var(--border)] px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
+            <h2 className="font-display text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
               Getting started
             </h2>
             <p className="mt-0.5 text-xs text-[var(--muted)]">
@@ -201,7 +202,7 @@ function GettingStartedCard({ steps }: { steps: GettingStartedStep[] }) {
               <div
                 key={i}
                 className={`h-1.5 w-6 rounded-full transition-colors ${
-                  s.done ? 'bg-[var(--cyan)]' : 'bg-[var(--border)]'
+                  s.done ? 'bg-prismatic' : 'bg-[var(--border)]'
                 }`}
               />
             ))}
@@ -349,7 +350,7 @@ export default function DashboardPage() {
 
       {/* Stat cards */}
       <section>
-        <h2 className="mb-4 text-xs font-bold uppercase tracking-widest text-[var(--muted)]">
+        <h2 className="mb-4 font-[family-name:var(--font-mono)] text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--cyan)]">
           Overview
         </h2>
         {isInitialLoading ? (
@@ -404,7 +405,7 @@ export default function DashboardPage() {
       {/* Recent missions */}
       <section>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xs font-bold uppercase tracking-widest text-[var(--muted)]">
+          <h2 className="font-[family-name:var(--font-mono)] text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--cyan)]">
             Recent Missions
           </h2>
           {totalMissions > 0 && (
@@ -433,12 +434,10 @@ export default function DashboardPage() {
               title="No missions yet"
               description="Launch a mission and the AI will scan job boards and rank the best matches for your profile."
               action={
-                <Link href="/missions/new">
-                  <Button variant="primary">
-                    <Rocket className="h-4 w-4" />
-                    Launch your first mission
-                  </Button>
-                </Link>
+                <MetalLink href="/missions/new" size="sm">
+                  <Rocket className="h-4 w-4" />
+                  Launch your first mission
+                </MetalLink>
               }
             />
           ) : (
@@ -461,7 +460,7 @@ export default function DashboardPage() {
                     <StatusBadge status={mission.status} />
 
                     <div className="hidden w-28 text-right sm:block">
-                      <span className="font-mono text-sm font-semibold text-[var(--text)]">
+                      <span className="font-display text-sm font-semibold text-[var(--text)]">
                         {safeNumber(mission.total_matches)}
                       </span>
                       <span className="ml-1 text-xs text-[var(--muted)]">

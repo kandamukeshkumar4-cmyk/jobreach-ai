@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { ScoreRing } from '@/components/ui/score-ring';
 import { Spinner } from '@/components/ui/spinner';
 import { STATUS_OPTIONS } from '@/components/tracker/constants';
+import { SmoothInput } from '@/components/ui/smooth-input';
 
 export interface AppDrawerProps {
   application: ApplicationOut;
@@ -187,7 +188,7 @@ export function AppDrawer({
               value={status}
               disabled={busy}
               onChange={(e) => setStatus(e.target.value as ApplicationStatus)}
-              className="w-full rounded-[7px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--text)] transition-colors hover:border-[var(--border-bright)] focus:border-[var(--cyan)] focus:outline-none disabled:opacity-50"
+              className="w-full px-3 py-2 text-sm disabled:opacity-50 huly-input"
             >
               {STATUS_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -199,13 +200,13 @@ export function AppDrawer({
 
           {/* Next action */}
           <Field label="Next action">
-            <input
+            <SmoothInput
               type="text"
               value={nextAction}
               disabled={busy}
               placeholder="e.g. Follow up with recruiter"
               onChange={(e) => setNextAction(e.target.value)}
-              className="w-full rounded-[7px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--muted)] transition-colors hover:border-[var(--border-bright)] focus:border-[var(--cyan)] focus:outline-none disabled:opacity-50"
+              className="px-3 py-2 text-sm"
             />
           </Field>
 
@@ -216,7 +217,7 @@ export function AppDrawer({
               value={nextActionDate}
               disabled={busy}
               onChange={(e) => setNextActionDate(e.target.value)}
-              className="w-full rounded-[7px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--text)] transition-colors [color-scheme:dark] hover:border-[var(--border-bright)] focus:border-[var(--cyan)] focus:outline-none disabled:opacity-50"
+              className="w-full px-3 py-2 text-sm [color-scheme:dark] disabled:opacity-50 huly-input"
             />
           </Field>
 
@@ -228,7 +229,7 @@ export function AppDrawer({
               rows={5}
               placeholder="Interview prep, contacts, salary expectations…"
               onChange={(e) => setNotes(e.target.value)}
-              className="w-full resize-y rounded-[7px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm leading-relaxed text-[var(--text)] placeholder:text-[var(--muted)] transition-colors hover:border-[var(--border-bright)] focus:border-[var(--cyan)] focus:outline-none disabled:opacity-50"
+              className="w-full resize-y px-3 py-2 text-sm leading-relaxed disabled:opacity-50 huly-input"
             />
           </Field>
 
@@ -284,7 +285,7 @@ export function AppDrawer({
                   onClick={handleSave}
                   disabled={busy || !dirty}
                 >
-                  {saving && <Spinner size={14} className="text-[#07071a]" />}
+                  {saving && <Spinner size={14} className="text-[var(--bg)]" />}
                   Save changes
                 </Button>
               </div>

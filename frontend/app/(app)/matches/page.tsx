@@ -6,7 +6,7 @@ import { AlertTriangle, RotateCw, Target, ArrowRight, Rocket } from 'lucide-reac
 import { api } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import type { MissionOut } from '@/lib/types';
-import { Card } from '@/components/ui/card';
+import { LiquidGlassCard as Card } from '@/components/ui/liquid-glass';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -32,7 +32,10 @@ export default function MatchesIndexPage() {
   return (
     <div className="mx-auto max-w-5xl">
       <div className="mb-6">
-        <h2 className="text-xl font-extrabold tracking-[-0.8px] text-[var(--text)]">
+        <span className="font-[family-name:var(--font-mono)] text-[11px] uppercase tracking-[2px] text-[var(--cyan)]">
+          Matches
+        </span>
+        <h2 className="font-display mt-2 text-2xl font-bold tracking-[-1px] text-[var(--text)]">
           Matches
         </h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
@@ -66,7 +69,7 @@ export default function MatchesIndexPage() {
               <Link href={`/matches/${mission.id}`} className="block">
                 <Card className="group flex h-full flex-col p-5">
                   <div className="flex items-start justify-between gap-3">
-                    <h3 className="min-w-0 flex-1 truncate text-sm font-bold tracking-[-0.3px] text-[var(--text)] transition-colors group-hover:text-[var(--cyan)]">
+                    <h3 className="font-display min-w-0 flex-1 truncate text-[15px] font-bold tracking-[-0.4px] text-[var(--text)] transition-colors group-hover:text-[var(--cyan)]">
                       {mission.title || 'Untitled mission'}
                     </h3>
                     <StatusBadge status={mission.status} />
@@ -115,7 +118,7 @@ function ListSkeleton() {
       {Array.from({ length: 4 }).map((_, i) => (
         <li
           key={i}
-          className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5"
+          className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] p-5"
         >
           <div className="flex items-start justify-between gap-3">
             <span className="h-3.5 w-36 animate-pulse rounded bg-[var(--card)]" />
@@ -137,11 +140,11 @@ function ErrorState({
   onRetry: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface)] px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] px-6 py-14 text-center">
       <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-bright)] bg-[var(--card)]">
         <AlertTriangle className="h-5 w-5 text-[var(--red)]" />
       </div>
-      <h3 className="mt-4 text-base font-bold tracking-[-0.5px] text-[var(--text)]">
+      <h3 className="font-display mt-4 text-base font-bold tracking-[-0.5px] text-[var(--text)]">
         Couldn&apos;t load missions
       </h3>
       <p className="mt-1.5 max-w-sm text-sm text-[var(--muted)]">

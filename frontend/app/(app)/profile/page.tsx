@@ -28,9 +28,10 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/format';
 import type { ProfileCreate, ProfileOut } from '@/lib/types';
 import { useAppStore } from '../store';
-import { Card } from '@/components/ui/card';
+import { LiquidGlassCard as Card } from '@/components/ui/liquid-glass';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { SmoothInput } from '@/components/ui/smooth-input';
 import { TagsInput } from '@/components/profile/tags-input';
 import { LocationPicker } from '@/components/profile/location-picker';
 import { SkillsInput, type SkillEntry, serializeSkills, parseSkills } from '@/components/profile/skills-input';
@@ -214,7 +215,7 @@ function Section({
           <Icon className="h-4 w-4" />
         </span>
         <div>
-          <h2 className="text-base font-bold tracking-[-0.5px] text-[var(--text)]">
+          <h2 className="font-display text-base font-bold tracking-[-0.5px] text-[var(--text)]">
             {title}
           </h2>
           {description && (
@@ -242,7 +243,7 @@ function Field({
     <div>
       <label
         htmlFor={htmlFor}
-        className="mb-1.5 block text-xs font-medium uppercase tracking-[0.5px] text-[var(--muted2)]"
+        className="mb-1.5 block font-[family-name:var(--font-mono)] text-xs font-medium uppercase tracking-[0.5px] text-[var(--muted2)]"
       >
         {label}
       </label>
@@ -252,8 +253,7 @@ function Field({
   );
 }
 
-const inputClass =
-  'w-full rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--muted)] transition-colors focus:border-[var(--border-bright)] focus:outline-none';
+const inputClass = 'w-full px-3 py-2 text-sm huly-input';
 
 // --- Page ---
 
@@ -414,7 +414,7 @@ export default function ProfilePage() {
       {/* Header */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-extrabold tracking-[-1.2px] text-[var(--text)]">
+          <h1 className="font-display text-2xl font-extrabold tracking-[-1.2px] text-[var(--text)]">
             Candidate Profile
           </h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
@@ -463,34 +463,34 @@ export default function ProfilePage() {
             description="How you appear to employers."
           >
             <Field label="Full name" htmlFor="full_name">
-              <input
+              <SmoothInput
                 id="full_name"
                 type="text"
                 value={form.full_name}
                 onChange={(e) => update('full_name', e.target.value)}
                 placeholder="Ada Lovelace"
-                className={inputClass}
+                className="px-3 py-2 text-sm"
               />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Email" htmlFor="email">
-                <input
+                <SmoothInput
                   id="email"
                   type="email"
                   value={form.email}
                   onChange={(e) => update('email', e.target.value)}
                   placeholder="you@example.com"
-                  className={inputClass}
+                  className="px-3 py-2 text-sm"
                 />
               </Field>
               <Field label="LinkedIn URL" htmlFor="linkedin_url">
-                <input
+                <SmoothInput
                   id="linkedin_url"
                   type="url"
                   value={form.linkedin_url ?? ''}
                   onChange={(e) => update('linkedin_url', e.target.value)}
                   placeholder="https://linkedin.com/in/…"
-                  className={inputClass}
+                  className="px-3 py-2 text-sm"
                 />
               </Field>
             </div>
@@ -504,7 +504,7 @@ export default function ProfilePage() {
                   <FileText className="h-4 w-4" />
                 </span>
                 <div>
-                  <h2 className="text-base font-bold tracking-[-0.5px] text-[var(--text)]">
+                  <h2 className="font-display text-base font-bold tracking-[-0.5px] text-[var(--text)]">
                     Resume
                   </h2>
                   <p className="mt-0.5 text-xs text-[var(--muted)]">
@@ -518,7 +518,7 @@ export default function ProfilePage() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isSaving || parseLoading}
-                  className="flex items-center gap-1.5 rounded-[7px] border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted2)] transition-colors hover:border-[var(--border-bright)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--border-bright)] px-3 py-1.5 text-xs font-medium text-[var(--muted2)] transition-colors hover:border-white/25 hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {parseLoading ? (
                     <Spinner size={12} />
@@ -535,7 +535,7 @@ export default function ProfilePage() {
                   className="hidden"
                 />
                 {/* Edit / Preview toggle */}
-                <div className="flex overflow-hidden rounded-[7px] border border-[var(--border)]">
+                <div className="flex overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-bright)]">
                   <button
                     type="button"
                     onClick={() => setShowPreview(false)}
@@ -573,7 +573,7 @@ export default function ProfilePage() {
 
             {showPreview ? (
               <div
-                className="min-h-[18rem] rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)]"
+                className="min-h-[18rem] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)]"
                 // Markdown is escaped before formatting in markdownToHtml.
                 dangerouslySetInnerHTML={{ __html: previewHtml }}
               />
@@ -628,16 +628,13 @@ export default function ProfilePage() {
           >
             <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
               <Field label="Minimum salary" htmlFor="target_salary_min">
-                <input
+                <SmoothInput
                   id="target_salary_min"
                   type="number"
-                  min={0}
-                  step={1000}
-                  inputMode="numeric"
                   value={
                     form.target_salary_min === undefined
                       ? ''
-                      : form.target_salary_min
+                      : String(form.target_salary_min)
                   }
                   onChange={(e) =>
                     update(
@@ -648,7 +645,7 @@ export default function ProfilePage() {
                     )
                   }
                   placeholder="120000"
-                  className={inputClass}
+                  className="px-3 py-2 text-sm"
                 />
               </Field>
               <Field label="Currency" htmlFor="target_salary_currency">

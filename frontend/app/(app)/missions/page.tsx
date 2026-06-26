@@ -39,7 +39,7 @@ export default function MissionsPage() {
       ) : isError ? (
         <ErrorState message={errorMessage(error)} onRetry={() => void refetch()} />
       ) : missions.length === 0 ? (
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+        <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)]">
           <EmptyState
             title="No missions yet"
             description="Launch a mission to scan job boards, score matches against your profile, and build your application pipeline."
@@ -64,7 +64,10 @@ function Header({ count }: { count: number }) {
   return (
     <div className="mb-6 flex items-end justify-between gap-4">
       <div>
-        <h2 className="text-xl font-extrabold tracking-[-0.8px] text-[var(--text)]">
+        <span className="font-[family-name:var(--font-mono)] text-[11px] uppercase tracking-[2px] text-[var(--cyan)]">
+          History
+        </span>
+        <h2 className="font-display mt-2 text-2xl font-bold tracking-[-1px] text-[var(--text)]">
           Mission history
         </h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
@@ -85,9 +88,9 @@ function MissionTable({
   refreshing: boolean;
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+    <div className="overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)]">
       <div
-        className={`${COLUMN_TEMPLATE} border-b border-[var(--border)] px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.6px] text-[var(--muted)]`}
+        className={`${COLUMN_TEMPLATE} border-b border-[var(--border)] px-5 py-3 font-[family-name:var(--font-mono)] text-[11px] font-semibold uppercase tracking-[1px] text-[var(--muted)]`}
       >
         <span>Mission</span>
         <span>Search query</span>
@@ -180,9 +183,9 @@ function LivePulse() {
 
 function ListSkeleton() {
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+    <div className="overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)]">
       <div
-        className={`${COLUMN_TEMPLATE} border-b border-[var(--border)] px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.6px] text-[var(--muted)]`}
+        className={`${COLUMN_TEMPLATE} border-b border-[var(--border)] px-5 py-3 font-[family-name:var(--font-mono)] text-[11px] font-semibold uppercase tracking-[1px] text-[var(--muted)]`}
       >
         <span>Mission</span>
         <span>Search query</span>
@@ -221,11 +224,11 @@ function ErrorState({
   onRetry: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface)] px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] px-6 py-14 text-center">
       <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-bright)] bg-[var(--card)]">
         <AlertTriangle className="h-5 w-5 text-[var(--red)]" />
       </div>
-      <h3 className="mt-4 text-base font-bold tracking-[-0.5px] text-[var(--text)]">
+      <h3 className="font-display mt-4 text-base font-bold tracking-[-0.5px] text-[var(--text)]">
         Couldn&apos;t load missions
       </h3>
       <p className="mt-1.5 max-w-sm text-sm text-[var(--muted)]">

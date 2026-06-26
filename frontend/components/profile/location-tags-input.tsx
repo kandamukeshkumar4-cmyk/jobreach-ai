@@ -273,7 +273,7 @@ export function LocationTagsInput({
       {/* Tags + text input */}
       <div
         className={cn(
-          'flex flex-wrap items-center gap-2 rounded-[8px] border border-[var(--border)] bg-[var(--card)] px-3 py-2 transition-colors focus-within:border-[var(--border-bright)]',
+          'flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-bright)] bg-[var(--card)] px-3 py-2 transition-colors focus-within:border-[var(--blue)] focus-within:ring-2 focus-within:ring-[var(--blue)]/30',
           showDropdown && 'rounded-b-none border-b-transparent',
           disabled && 'opacity-60',
         )}
@@ -281,7 +281,7 @@ export function LocationTagsInput({
         {value.map((tag, i) => (
           <span
             key={`${tag}-${i}`}
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--border-bright)] bg-[var(--surface)] py-1 pl-2.5 pr-1.5 text-xs font-medium text-[var(--text)]"
+            className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--border)] bg-white/[0.06] py-1 pl-2.5 pr-1.5 text-xs font-medium text-[var(--text)]"
           >
             {tag}
             <button
@@ -314,7 +314,7 @@ export function LocationTagsInput({
 
       {/* Autocomplete dropdown */}
       {showDropdown && (
-        <ul className="absolute left-0 right-0 z-50 overflow-hidden rounded-b-[8px] border border-t-0 border-[var(--border-bright)] bg-[var(--card)] shadow-2xl shadow-black/40">
+        <ul className="absolute left-0 right-0 z-50 overflow-hidden rounded-b-[var(--radius-md)] border border-t-0 border-[var(--border-bright)] bg-[var(--card)] shadow-2xl shadow-black/40">
           {suggestions.map((loc, i) => (
             <li key={loc.display}>
               <button

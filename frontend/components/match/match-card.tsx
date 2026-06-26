@@ -17,7 +17,7 @@ import { api, API_BASE } from '@/lib/api';
 import { getAccessToken } from '@/lib/supabase';
 import { formatSalary } from '@/lib/format';
 import type { MatchOut, ResumeTask } from '@/lib/types';
-import { Card } from '@/components/ui/card';
+import { LiquidGlassCard } from '@/components/ui/liquid-glass';
 import { ScoreRing } from '@/components/ui/score-ring';
 import { DimensionBar } from '@/components/ui/dimension-bar';
 import { Chip, type ChipTone } from '@/components/ui/chip';
@@ -313,7 +313,7 @@ export function MatchCard({ match }: MatchCardProps) {
   const researchChips = buildResearchChips(match.company_research);
 
   return (
-    <Card className="flex h-full flex-col p-5">
+    <LiquidGlassCard className="flex h-full flex-col p-5">
       {/* Header: company / title / location + score ring */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -322,7 +322,7 @@ export function MatchCard({ match }: MatchCardProps) {
             <span className="truncate">{job?.company || 'Unknown company'}</span>
           </div>
           <h3
-            className="mt-1.5 line-clamp-2 text-[15px] font-bold leading-snug tracking-[-0.3px] text-[var(--text)]"
+            className="font-display mt-1.5 line-clamp-2 text-[15px] font-bold leading-snug tracking-[-0.4px] text-[var(--text)]"
             title={job?.title}
           >
             {job?.title || 'Untitled role'}
@@ -484,7 +484,7 @@ export function MatchCard({ match }: MatchCardProps) {
           </Button>
         )}
       </div>
-    </Card>
+    </LiquidGlassCard>
   );
 }
 

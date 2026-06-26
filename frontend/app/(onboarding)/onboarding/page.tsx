@@ -1,11 +1,10 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
   ArrowLeft,
-  Upload,
   FileText,
   User,
   Target,
@@ -19,6 +18,9 @@ import { TagsInput } from '@/components/profile/tags-input';
 import { LocationTagsInput } from '@/components/profile/location-tags-input';
 import { SkillsInput, serializeSkills, type SkillEntry } from '@/components/profile/skills-input';
 import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
+import { SmoothInput } from '@/components/ui/smooth-input';
+import { FileUpload } from '@/components/ui/file-upload';
 
 const PROFILE_ID_KEY = 'jobreach.activeProfileId';
 
@@ -97,7 +99,7 @@ const STEPS = [
 ];
 
 const INPUT =
-  'w-full rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)] placeholder:text-[var(--muted)] outline-none transition-colors focus:border-[var(--cyan)] focus:ring-2 focus:ring-[var(--cyan)]/20';
+  'w-full rounded-[var(--radius-md)] border border-[var(--border-bright)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--text)] placeholder:text-[var(--muted)] outline-none transition-colors focus:border-[var(--blue)] focus:ring-2 focus:ring-[var(--blue)]/30';
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -111,8 +113,6 @@ export default function OnboardingPage() {
   const [parseLoading, setParseLoading] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [savedProfileId, setSavedProfileId] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   const update = useCallback(
     <K extends keyof WizardData>(key: K, value: WizardData[K]) => {
       setData((prev) => ({ ...prev, [key]: value }));
@@ -121,23 +121,18 @@ export default function OnboardingPage() {
     [],
   );
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
+  const handleFileSelected = useCallback(async (file: File) => {
     setParseLoading(true);
     setParseError(null);
     try {
       const result = await api.profile.parseResume(file);
       update('resume_markdown', result.text);
     } catch (err) {
-      setParseError(
-        err instanceof Error ? err.message : 'Failed to parse file',
-      );
+      setParseError(err instanceof Error ? err.message : 'Failed to parse file');
     } finally {
       setParseLoading(false);
     }
-  };
+  }, [update]);
 
   const validate = (s: number): string | null => {
     if (s === 0) {
@@ -249,16 +244,16 @@ export default function OnboardingPage() {
       {/* Top bar */}
       <header className="flex h-16 items-center border-b border-[var(--border)] bg-[var(--surface)] px-8">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--cyan)]">
-            <span className="text-xs font-bold tracking-tight text-[#07071a]">
+          <div className="bg-prismatic flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] shadow-[var(--glow-blue)]">
+            <span className="text-xs font-bold tracking-tight text-[#050506]">
               JR
             </span>
           </div>
-          <span className="text-lg font-bold tracking-[-0.8px] text-[var(--text)]">
+          <span className="font-display text-lg font-bold tracking-[-0.8px] text-[var(--text)]">
             JobReach AI
           </span>
         </div>
-        <div className="ml-auto text-xs font-medium text-[var(--muted)]">
+        <div className="ml-auto font-[family-name:var(--font-mono)] text-[11px] font-medium uppercase tracking-[1px] text-[var(--muted)]">
           Step {step + 1} of {STEPS.length}
         </div>
       </header>
@@ -278,23 +273,23 @@ export default function OnboardingPage() {
               {i > 0 && (
                 <div
                   className={`absolute left-0 top-1/2 h-px w-1/2 -translate-y-1/2 transition-colors ${
-                    i <= step ? 'bg-[var(--cyan)]' : 'bg-[var(--border)]'
+                    i <= step ? 'bg-prismatic' : 'bg-[var(--border)]'
                   }`}
                 />
               )}
               {i < STEPS.length - 1 && (
                 <div
                   className={`absolute right-0 top-1/2 h-px w-1/2 -translate-y-1/2 transition-colors ${
-                    i < step ? 'bg-[var(--cyan)]' : 'bg-[var(--border)]'
+                    i < step ? 'bg-prismatic' : 'bg-[var(--border)]'
                   }`}
                 />
               )}
               <span
                 className={`relative z-10 flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-all ${
                   done
-                    ? 'bg-[var(--cyan)] text-[#07071a]'
+                    ? 'bg-prismatic text-[#050506]'
                     : active
-                      ? 'bg-[var(--cyan)] text-[#07071a] ring-4 ring-[var(--cyan)]/20'
+                      ? 'bg-prismatic text-[#050506] shadow-[var(--glow-blue)] ring-4 ring-[var(--blue)]/25'
                       : 'border border-[var(--border)] bg-[var(--card)] text-[var(--muted)]'
                 }`}
               >
@@ -315,63 +310,61 @@ export default function OnboardingPage() {
         <div className="w-full max-w-lg">
           {/* Step header */}
           <div className="mb-8 flex items-start gap-4">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--cyan)_15%,transparent)] text-[var(--cyan)]">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--cyan)_15%,transparent)] text-[var(--cyan)]">
               <Icon className="h-5 w-5" />
             </span>
             <div>
-              <h1 className="text-2xl font-bold tracking-[-1px] text-[var(--text)]">
+              <h1 className="font-display text-2xl font-bold tracking-[-1px] text-[var(--text)]">
                 {cfg.title}
               </h1>
-              <p className="mt-1.5 text-sm leading-relaxed text-[var(--muted)]">
+              <p className="mt-1.5 text-sm leading-relaxed text-[var(--muted2)]">
                 {cfg.subtitle}
               </p>
             </div>
           </div>
 
           {/* Form card */}
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-7 shadow-lg shadow-black/20">
+          <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] p-7 shadow-lg shadow-black/20">
             {/* ── Step 0: Identity ── */}
             {step === 0 && (
               <div className="space-y-5">
                 <Field label="Full Name" required>
-                  <input
+                  <SmoothInput
                     type="text"
                     value={data.full_name}
                     onChange={(e) => update('full_name', e.target.value)}
                     placeholder="Jane Smith"
                     autoFocus
-                    className={INPUT}
+                    className="px-4 py-3 text-sm"
                   />
                   <Hint>This will appear on every resume we generate for you.</Hint>
                 </Field>
                 <Field label="Email Address" required>
-                  <input
+                  <SmoothInput
                     type="email"
                     value={data.email}
                     onChange={(e) => update('email', e.target.value)}
                     placeholder="jane@example.com"
-                    className={INPUT}
+                    className="px-4 py-3 text-sm"
                   />
                   <Hint>Used on your resumes as your contact email.</Hint>
                 </Field>
                 <Field label="LinkedIn URL" optional>
-                  <input
+                  <SmoothInput
                     type="url"
                     value={data.linkedin_url}
                     onChange={(e) => update('linkedin_url', e.target.value)}
                     placeholder="https://linkedin.com/in/jane-smith"
-                    className={INPUT}
+                    className="px-4 py-3 text-sm"
                   />
                 </Field>
                 <Field label="Years of Work Experience" optional>
-                  <input
+                  <SmoothInput
                     type="number"
-                    min={0}
-                    max={50}
                     value={data.years_experience}
                     onChange={(e) => update('years_experience', e.target.value)}
                     placeholder="5"
-                    className={INPUT}
+                    className="px-4 py-3 text-sm"
                   />
                   <Hint>Helps us filter roles that match your seniority level.</Hint>
                 </Field>
@@ -381,56 +374,24 @@ export default function OnboardingPage() {
             {/* ── Step 1: Resume ── */}
             {step === 1 && (
               <div className="space-y-4">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={parseLoading}
-                  className="group flex w-full flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-[var(--border-bright)] bg-[var(--card)] px-6 py-10 text-center transition-colors hover:border-[var(--cyan)] hover:bg-[color-mix(in_srgb,var(--cyan)_4%,transparent)] disabled:pointer-events-none disabled:opacity-60"
-                >
-                  {parseLoading ? (
-                    <>
-                      <Spinner size={26} />
-                      <span className="text-sm font-medium text-[var(--muted)]">
-                        Reading your resume…
-                      </span>
-                    </>
-                  ) : data.resume_markdown ? (
-                    <>
-                      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--green)_15%,transparent)]">
-                        <Check className="h-5 w-5 text-[var(--green)]" />
-                      </span>
-                      <div>
-                        <span className="block text-sm font-semibold text-[var(--green)]">
-                          Resume uploaded successfully
-                        </span>
-                        <span className="mt-0.5 block text-xs text-[var(--muted)]">
-                          Click to replace with a different file
-                        </span>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--card)] ring-2 ring-[var(--border-bright)] transition-colors group-hover:ring-[var(--cyan)]">
-                        <Upload className="h-5 w-5 text-[var(--muted2)]" />
-                      </span>
-                      <div>
-                        <span className="block text-sm font-semibold text-[var(--text)]">
-                          Click to upload your resume
-                        </span>
-                        <span className="mt-0.5 block text-xs text-[var(--muted)]">
-                          Supports PDF, DOCX, and TXT files
-                        </span>
-                      </div>
-                    </>
-                  )}
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.docx,.txt"
-                  onChange={handleFileUpload}
-                  className="hidden"
+                <FileUpload
+                  acceptedFileTypes={['.pdf', '.docx', '.txt']}
+                  maxFileSize={10 * 1024 * 1024}
+                  onUploadSuccess={handleFileSelected}
+                  uploadDelay={350}
                 />
+                {parseLoading && (
+                  <div className="flex items-center justify-center gap-2 py-1">
+                    <Spinner size={14} />
+                    <span className="text-xs text-[var(--muted)]">Reading your resume…</span>
+                  </div>
+                )}
+                {data.resume_markdown && !parseLoading && (
+                  <div className="flex items-center gap-1.5 text-xs text-[var(--green)]">
+                    <Check className="h-3.5 w-3.5" />
+                    <span>Resume loaded — you can edit or replace it below</span>
+                  </div>
+                )}
                 {parseError && (
                   <p className="text-xs text-[var(--red)]">{parseError}</p>
                 )}
@@ -493,14 +454,12 @@ export default function OnboardingPage() {
                   />
                 </Field>
                 <Field label="Minimum Salary (USD)" optional>
-                  <input
+                  <SmoothInput
                     type="number"
-                    min={0}
-                    step={5000}
                     value={data.target_salary_min}
                     onChange={(e) => update('target_salary_min', e.target.value)}
                     placeholder="e.g. 120000"
-                    className={INPUT}
+                    className="px-4 py-3 text-sm"
                   />
                   <Hint>We use this to filter out roles below your target.</Hint>
                 </Field>
@@ -525,7 +484,7 @@ export default function OnboardingPage() {
                 </Field>
 
                 <div>
-                  <label className="mb-3 block text-xs font-bold uppercase tracking-widest text-[var(--muted2)]">
+                  <label className="mb-3 block font-[family-name:var(--font-mono)] text-xs font-bold uppercase tracking-widest text-[var(--cyan)]">
                     Where to search
                   </label>
                   <p className="mb-3 text-xs text-[var(--muted)]">
@@ -546,21 +505,21 @@ export default function OnboardingPage() {
                                 : [...data.sources, source.id],
                             )
                           }
-                          className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                          className={`flex items-center gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors ${
                             checked
-                              ? 'border-[var(--cyan)] bg-[color-mix(in_srgb,var(--cyan)_10%,transparent)]'
+                              ? 'border-[var(--blue)] bg-[color-mix(in_srgb,var(--blue)_12%,transparent)]'
                               : 'border-[var(--border)] bg-[var(--card)] hover:border-[var(--border-bright)]'
                           }`}
                         >
                           <span
-                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors ${
                               checked
-                                ? 'border-[var(--cyan)] bg-[var(--cyan)]'
+                                ? 'border-[var(--blue)] bg-prismatic'
                                 : 'border-[var(--border-bright)] bg-transparent'
                             }`}
                           >
                             {checked && (
-                              <Check className="h-2.5 w-2.5 text-[#07071a]" />
+                              <Check className="h-2.5 w-2.5 text-[#050506]" />
                             )}
                           </span>
                           <span>
@@ -578,8 +537,8 @@ export default function OnboardingPage() {
                 </div>
 
                 {/* What happens next */}
-                <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-                  <p className="mb-2 text-xs font-bold uppercase tracking-widest text-[var(--muted2)]">
+                <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-4">
+                  <p className="mb-2 font-[family-name:var(--font-mono)] text-xs font-bold uppercase tracking-widest text-[var(--cyan)]">
                     What happens next
                   </p>
                   <ul className="space-y-1.5">
@@ -603,7 +562,7 @@ export default function OnboardingPage() {
 
             {/* Error */}
             {error && (
-              <div className="mt-5 rounded-xl border border-[var(--red)]/30 bg-[color-mix(in_srgb,var(--red)_8%,transparent)] px-4 py-3 text-sm text-[var(--red)]">
+              <div className="mt-5 rounded-[var(--radius-md)] border border-[var(--red)]/30 bg-[color-mix(in_srgb,var(--red)_8%,transparent)] px-4 py-3 text-sm text-[var(--red)]">
                 {error}
               </div>
             )}
@@ -627,15 +586,15 @@ export default function OnboardingPage() {
                 <div />
               )}
 
-              <button
-                type="button"
+              <Button
+                variant="primary"
                 onClick={handleNext}
                 disabled={saving || parseLoading}
-                className="flex items-center gap-2 rounded-xl bg-[var(--cyan)] px-7 py-3 text-sm font-bold text-[#07071a] shadow-lg shadow-[var(--cyan)]/20 transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-50 disabled:shadow-none"
+                className="px-7 py-3"
               >
                 {saving ? (
                   <>
-                    <Spinner size={16} className="text-[#07071a]" />
+                    <Spinner size={16} className="text-[#050506]" />
                     {step === 2 ? 'Saving profile…' : 'Launching…'}
                   </>
                 ) : (
@@ -645,7 +604,7 @@ export default function OnboardingPage() {
                     {step === 3 && <Rocket className="h-4 w-4" />}
                   </>
                 )}
-              </button>
+              </Button>
             </div>
           </div>
 

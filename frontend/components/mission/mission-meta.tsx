@@ -26,7 +26,7 @@ export function MissionMeta({ mission, live }: MissionMetaProps) {
         <Stat label="Matches" value={mission?.total_matches} accent="cyan" />
 
         <div className="flex flex-col gap-1">
-          <span className="text-[10px] uppercase tracking-[1px] text-[var(--muted)]">
+          <span className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[1.4px] text-[var(--muted)]">
             Elapsed
           </span>
           <span
@@ -40,7 +40,7 @@ export function MissionMeta({ mission, live }: MissionMetaProps) {
         <div className="ml-auto flex flex-wrap items-center gap-3">
           {sources.length > 0 && (
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] uppercase tracking-[1px] text-[var(--muted)]">
+              <span className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[1.4px] text-[var(--muted)]">
                 Sources
               </span>
               <div className="flex flex-wrap gap-1.5">
@@ -72,7 +72,7 @@ function Stat({ label, value, accent }: StatProps) {
   const color = accent === 'cyan' ? 'var(--cyan)' : 'var(--text)';
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-[1px] text-[var(--muted)]">
+      <span className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[1.4px] text-[var(--muted)]">
         {label}
       </span>
       <span

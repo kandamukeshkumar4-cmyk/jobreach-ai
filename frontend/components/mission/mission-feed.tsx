@@ -2,6 +2,12 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AgentOrb } from '@/components/ui/agent-orb';
+import {
+  ChainOfThought,
+  ChainOfThoughtContent,
+  ChainOfThoughtHeader,
+  ChainOfThoughtStep,
+} from '@/components/ui/chain-of-thought';
 import type { MissionEventOut } from '@/lib/types';
 import type { MissionStreamStatus } from '@/hooks/useMissionStream';
 import { FeedItem } from './feed-item';
@@ -500,7 +506,7 @@ function SearchPulse({
         {nodes.map((node, i) => (
           <div
             key={`node-${i}-${node.label}`}
-            className={['absolute flex size-8 items-center justify-center rounded-full border text-[10px] font-bold text-white shadow-[0_0_16px_rgba(34,211,238,0.18)] transition-all duration-500', RADAR_POSITIONS[i], node.isCompany ? 'mission-node-company border-white/30' : node.active ? 'mission-node-active border-[var(--cyan)] text-[var(--text)] bg-[var(--surface)]' : 'border-[var(--border-bright)] bg-[var(--surface)] text-[var(--text)]'].join(' ')}
+            className={['absolute flex size-8 items-center justify-center rounded-full border text-[10px] font-bold text-white shadow-[0_0_16px_color-mix(in_srgb,var(--cyan)_18%,transparent)] transition-all duration-500', RADAR_POSITIONS[i], node.isCompany ? 'mission-node-company border-white/30' : node.active ? 'mission-node-active border-[var(--cyan)] text-[var(--text)] bg-[var(--surface)]' : 'border-[var(--border-bright)] bg-[var(--surface)] text-[var(--text)]'].join(' ')}
             style={node.isCompany && node.color ? { backgroundColor: node.color, borderColor: node.color, boxShadow: `0 0 20px ${node.color}66` } : undefined}
             title={node.title}
           >
@@ -626,7 +632,7 @@ function EmergingMatches({ starEvents, active }: { starEvents: MissionEventOut[]
                 style={{ animationDelay: `${i * 60}ms` }}
               >
                 {isNew && (
-                  <span className="absolute right-2 top-2 rounded-sm bg-[var(--cyan)] px-1.5 py-0.5 text-[9px] font-bold tracking-widest text-[#07071a]">
+                  <span className="absolute right-2 top-2 rounded-sm bg-[var(--cyan)] px-1.5 py-0.5 text-[9px] font-bold tracking-widest text-[var(--bg)]">
                     NEW
                   </span>
                 )}
@@ -745,14 +751,52 @@ function AgentTypewriter({ size = 'md' }: { size?: 'sm' | 'md' }) {
   );
 }
 
+function ConnectingChainOfThought() {
+  const VISIBLE = 5; // steps to show at once
+  const STEP_MS = 1800; // ms between step advances
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      setActiveIdx((i) => (i + 1) % JOB_SEARCH_THOUGHTS.length);
+    }, STEP_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  // Build window: last VISIBLE-1 completed + 1 active
+  const windowStart = Math.max(0, activeIdx - (VISIBLE - 1));
+  const steps = JOB_SEARCH_THOUGHTS.slice(windowStart, activeIdx + 1);
+
+  return (
+    <ChainOfThought defaultOpen={true} className="w-full">
+      <ChainOfThoughtHeader>Searching for jobs…</ChainOfThoughtHeader>
+      <ChainOfThoughtContent>
+        {steps.map((thought, i) => {
+          const globalIdx = windowStart + i;
+          const isActive = globalIdx === activeIdx;
+          return (
+            <ChainOfThoughtStep
+              key={globalIdx}
+              label={thought}
+              status={isActive ? 'active' : 'complete'}
+            />
+          );
+        })}
+      </ChainOfThoughtContent>
+    </ChainOfThought>
+  );
+}
+
 function ConnectingState() {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-5 px-6">
       <AgentOrb state="running" size={14} />
       <p className="text-[13px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
         Connecting to agent...
       </p>
-      <AgentTypewriter />
+      <div className="w-full max-w-xs">
+        <ConnectingChainOfThought />
+      </div>
     </div>
   );
 }

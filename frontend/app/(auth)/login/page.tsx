@@ -7,9 +7,7 @@ import { AlertCircle, Info } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-
-const inputClass =
-  'w-full rounded-[7px] border border-[var(--border)] bg-[var(--card)] px-3.5 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--muted)] tracking-[-0.2px] transition-colors focus:border-[var(--border-bright)] focus:outline-none focus:ring-2 focus:ring-[var(--cyan)]/40 disabled:cursor-not-allowed disabled:opacity-60'
+import { SmoothInput } from '@/components/ui/smooth-input'
 
 function GoogleIcon() {
   return (
@@ -70,16 +68,19 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-7">
+    <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] p-7">
       <div className="mb-6">
-        <h1 className="text-xl font-bold tracking-[-0.8px] text-[var(--text)]">Welcome back</h1>
+        <p className="mb-2 font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.18em] text-[var(--cyan)]">
+          Account
+        </p>
+        <h1 className="font-display text-xl font-bold tracking-[-0.8px] text-[var(--text)]">Welcome back</h1>
         <p className="mt-1 text-sm text-[var(--muted2)] tracking-[-0.2px]">
           Sign in to your JobReach account.
         </p>
       </div>
 
       {!configured && (
-        <div className="mb-5 flex items-start gap-2.5 rounded-[7px] border border-[var(--border-bright)] bg-[var(--card)] px-3.5 py-3">
+        <div className="mb-5 flex items-start gap-2.5 rounded-[var(--radius-md)] border border-[var(--border-bright)] bg-[var(--card)] px-3.5 py-3">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-[var(--amber)]" />
           <p className="text-xs leading-relaxed text-[var(--muted2)] tracking-[-0.2px]">
             Auth not configured yet — you can still{' '}
@@ -97,7 +98,7 @@ export default function LoginPage() {
             type="button"
             onClick={handleGoogle}
             disabled={googleLoading}
-            className="mb-4 flex w-full items-center justify-center gap-2.5 rounded-[7px] border border-[var(--border)] bg-[var(--card)] px-4 py-2.5 text-sm font-medium text-[var(--text)] tracking-[-0.2px] transition-colors hover:border-[var(--border-bright)] hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-60"
+            className="mb-4 flex w-full items-center justify-center gap-2.5 rounded-[var(--radius-pill)] border border-[var(--border-bright)] bg-[var(--card)] px-4 py-2.5 text-sm font-medium text-[var(--text)] tracking-[-0.2px] transition-colors hover:border-white/25 hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {googleLoading ? <Spinner size={15} /> : <GoogleIcon />}
             Continue with Google
@@ -116,7 +117,7 @@ export default function LoginPage() {
           <label htmlFor="email" className="block text-xs font-medium text-[var(--muted2)] tracking-[-0.2px]">
             Email
           </label>
-          <input
+          <SmoothInput
             id="email"
             name="email"
             type="email"
@@ -126,7 +127,7 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
-            className={inputClass}
+            className="px-3.5 py-2.5 tracking-[-0.2px]"
           />
         </div>
 
@@ -134,7 +135,7 @@ export default function LoginPage() {
           <label htmlFor="password" className="block text-xs font-medium text-[var(--muted2)] tracking-[-0.2px]">
             Password
           </label>
-          <input
+          <SmoothInput
             id="password"
             name="password"
             type="password"
@@ -144,12 +145,12 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
-            className={inputClass}
+            className="px-3.5 py-2.5 tracking-[-0.2px]"
           />
         </div>
 
         {error && (
-          <div className="flex items-start gap-2 rounded-[7px] border border-[var(--red)]/40 bg-[var(--red)]/10 px-3.5 py-2.5">
+          <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[var(--red)]/40 bg-[var(--red)]/10 px-3.5 py-2.5">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--red)]" />
             <p className="text-xs leading-relaxed text-[var(--red)] tracking-[-0.2px]">{error}</p>
           </div>
@@ -163,7 +164,7 @@ export default function LoginPage() {
         >
           {loading ? (
             <>
-              <Spinner size={15} className="text-[#07071a]" />
+              <Spinner size={15} className="text-[#050506]" />
               Signing in…
             </>
           ) : (

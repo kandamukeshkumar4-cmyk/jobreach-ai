@@ -8,11 +8,13 @@ import { AlertTriangle, ChevronDown, Rocket, UserPlus } from 'lucide-react'
 import { api } from '@/lib/api'
 import type { MissionCreate, MissionOut } from '@/lib/types'
 import { useAppStore } from '../../store'
-import { Card } from '@/components/ui/card'
+import { LiquidGlassCard as Card } from '@/components/ui/liquid-glass'
 import { Button } from '@/components/ui/button'
+import { MetalButton } from '@/components/ui/metal-button'
 import { Spinner } from '@/components/ui/spinner'
 import { EmptyState } from '@/components/ui/empty-state'
 import { cn } from '@/lib/format'
+import { SmoothInput } from '@/components/ui/smooth-input'
 
 // --- Source providers -------------------------------------------------------
 
@@ -44,7 +46,7 @@ interface MissionCreatePayload extends MissionCreate {
 // --- Reusable field primitives ---------------------------------------------
 
 const FIELD_CLASS =
-  'w-full rounded-[7px] border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--muted)] transition-colors duration-150 hover:border-[var(--border-bright)] focus:border-[var(--cyan)] focus:outline-none focus:ring-1 focus:ring-[var(--cyan)] disabled:cursor-not-allowed disabled:opacity-50'
+  'w-full px-3 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50 huly-input'
 
 function Label({
   htmlFor,
@@ -166,7 +168,10 @@ export default function NewMissionPage() {
   return (
     <div className="mx-auto max-w-2xl">
       <header className="mb-6">
-        <h2 className="text-2xl font-extrabold tracking-[-1px] text-[var(--text)]">
+        <span className="font-[family-name:var(--font-mono)] text-[11px] uppercase tracking-[2px] text-[var(--cyan)]">
+          Launch
+        </span>
+        <h2 className="font-display mt-2 text-2xl font-bold tracking-[-1px] text-[var(--text)]">
           New Mission
         </h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
@@ -187,13 +192,13 @@ export default function NewMissionPage() {
               <Label htmlFor="search_query" required>
                 Search query
               </Label>
-              <input
+              <SmoothInput
                 id="search_query"
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="e.g. Senior backend engineer, Python, remote"
-                className={FIELD_CLASS}
+                className="px-3 py-2.5 text-sm"
                 disabled={!hasProfile || submitting}
                 required
                 autoFocus
@@ -206,13 +211,13 @@ export default function NewMissionPage() {
 
             <div>
               <Label htmlFor="title">Mission title</Label>
-              <input
+              <SmoothInput
                 id="title"
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Optional — defaults to your search query"
-                className={FIELD_CLASS}
+                className="px-3 py-2.5 text-sm"
                 disabled={!hasProfile || submitting}
               />
             </div>
@@ -222,7 +227,7 @@ export default function NewMissionPage() {
         {/* Sources */}
         <Card className="p-6">
           <div className="mb-1 flex items-baseline justify-between">
-            <h3 className="text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
+            <h3 className="font-display text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
               Sources
             </h3>
             <span className="font-mono text-xs text-[var(--muted)]">
@@ -262,7 +267,7 @@ export default function NewMissionPage() {
                     {checked && (
                       <svg
                         viewBox="0 0 12 12"
-                        className="h-3 w-3 text-[#07071a]"
+                        className="h-3 w-3 text-[var(--bg)]"
                         fill="none"
                         stroke="currentColor"
                         strokeWidth={2.2}
@@ -296,7 +301,7 @@ export default function NewMissionPage() {
             className="flex w-full items-center justify-between px-6 py-4 text-left transition-colors hover:bg-[var(--card)]"
           >
             <span>
-              <span className="block text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
+              <span className="font-display block text-sm font-bold tracking-[-0.3px] text-[var(--text)]">
                 Advanced filters
               </span>
               <span className="block text-xs text-[var(--muted)]">
@@ -315,13 +320,13 @@ export default function NewMissionPage() {
             <div className="space-y-5 border-t border-[var(--border)] px-6 py-5">
               <div>
                 <Label htmlFor="location_filter">Location filter</Label>
-                <input
+                <SmoothInput
                   id="location_filter"
                   type="text"
                   value={locationFilter}
                   onChange={(e) => setLocationFilter(e.target.value)}
                   placeholder="e.g. Remote, Berlin, United States"
-                  className={FIELD_CLASS}
+                  className="px-3 py-2.5 text-sm"
                   disabled={!hasProfile || submitting}
                 />
               </div>
@@ -329,16 +334,14 @@ export default function NewMissionPage() {
               <div>
                 <Label htmlFor="salary_min">Minimum salary</Label>
                 <div className="flex gap-2">
-                  <input
+                  <SmoothInput
                     id="salary_min"
                     type="number"
-                    min={0}
-                    step={1000}
-                    inputMode="numeric"
                     value={salaryMin}
                     onChange={(e) => setSalaryMin(e.target.value)}
                     placeholder="e.g. 120000"
-                    className={cn(FIELD_CLASS, 'flex-1')}
+                    className="px-3 py-2.5 text-sm flex-1"
+                    wrapperClassName="flex-1"
                     disabled={!hasProfile || submitting}
                   />
                   <select
@@ -388,10 +391,10 @@ export default function NewMissionPage() {
           >
             Cancel
           </Button>
-          <Button type="submit" disabled={!canSubmit} className="min-w-[150px]">
+          <MetalButton type="submit" disabled={!canSubmit} size="sm">
             {submitting ? (
               <>
-                <Spinner size={16} className="text-[#07071a]" />
+                <Spinner size={16} className="text-[#050506]" />
                 Launching…
               </>
             ) : (
@@ -400,7 +403,7 @@ export default function NewMissionPage() {
                 Launch Mission
               </>
             )}
-          </Button>
+          </MetalButton>
         </div>
       </form>
     </div>
@@ -418,7 +421,7 @@ function NoProfileNotice() {
         action={
           <Link
             href="/profile"
-            className="inline-flex items-center justify-center gap-2 rounded-[7px] bg-[var(--cyan)] px-4 py-2 text-sm font-semibold tracking-[-0.2px] text-[#07071a] transition-[filter] duration-150 hover:brightness-110"
+            className="inline-flex items-center justify-center gap-2 rounded-[var(--radius-pill)] bg-[var(--cyan)] px-4 py-2 text-sm font-semibold tracking-[-0.2px] text-[var(--bg)] transition-[filter] duration-150 hover:brightness-110"
           >
             <UserPlus className="h-4 w-4" />
             Create profile

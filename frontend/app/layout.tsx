@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, JetBrains_Mono, Manrope, DM_Sans } from "next/font/google";
+import { Geist, Geist_Mono, JetBrains_Mono, Manrope, DM_Sans, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 
@@ -29,6 +29,12 @@ const dmSans = DM_Sans({
   subsets: ["latin"],
 });
 
+// Display / headings (Huly design system)
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
+  subsets: ["latin"],
+});
+
 export const metadata: Metadata = {
   title: "JobReach AI",
   description: "The AI Agent That Does the Job Search For You",
@@ -45,7 +51,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} ${manrope.variable} ${dmSans.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} ${manrope.variable} ${dmSans.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
       <body className="min-h-full">
         <Providers>{children}</Providers>
