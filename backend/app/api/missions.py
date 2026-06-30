@@ -18,7 +18,11 @@ router = APIRouter()
 # SIGKILL) never increments it, stranding the mission on 'running' forever.
 # These let a read finalize a mission whose worker clearly died.
 MISSION_MIN_AGE_SECONDS = 90        # never touch a just-started mission
-MISSION_STALL_QUIET_SECONDS = 300   # no event AND no new match for 5 min = dead
+# A real mission finishes in well under 10 min; only declare death after a long
+# quiet window so a slow company-research fetch or a backlogged-but-alive worker
+# is NOT mislabelled failed. (The worker is now supervised + auto-restarting, so
+# genuine deaths are rare; this is a last-resort net, not the primary mechanism.)
+MISSION_STALL_QUIET_SECONDS = 1800  # 30 min with no event AND no new match = dead
 
 
 def _redis_client():
@@ -141,8 +145,11 @@ async def create_mission(payload: MissionCreate, db=Depends(get_db)):
 
 @router.get("/", response_model=List[MissionOut])
 async def list_missions(db=Depends(get_db)):
+    # No self-heal here: the list view doesn't wait on a single mission, and
+    # reconciling every row would fire 2-3 child-table queries per running
+    # mission on every poll. Self-heal lives on the single-mission GET only.
     result = db.table("missions").select("*").order("created_at", desc=True).limit(50).execute()
-    return [_reconcile_if_stalled(db, m) for m in (result.data or [])]
+    return result.data or []
 
 
 @router.get("/{mission_id}", response_model=MissionOut)

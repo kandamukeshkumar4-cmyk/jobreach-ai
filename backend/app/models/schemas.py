@@ -125,7 +125,7 @@ class MatchOut(BaseModel):
     overall_score: float
     grade: Grade
     dimensions: List[DimensionScore]
-    why_fit: str
+    why_fit: Optional[str] = None  # nullable in DB; one null row must not 500 the whole board
     why_gap: Optional[str] = None
     company_research: Optional[Dict[str, Any]] = None
     resume_ready: bool = False
