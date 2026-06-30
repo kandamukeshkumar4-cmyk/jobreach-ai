@@ -173,6 +173,21 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     async function resolveProfile() {
+      // Auth guard: a logged-out user must never see the app shell. When
+      // Supabase is configured and there is no session, bounce to /login.
+      // (If Supabase isn't configured we skip the guard so the app still runs.)
+      if (supabase) {
+        try {
+          const { data } = await supabase.auth.getSession()
+          if (!data.session) {
+            router.replace('/login')
+            return
+          }
+        } catch {
+          // getSession failed unexpectedly — fall through; pages handle auth.
+        }
+      }
+
       // Fast path: localStorage hit → trust it, no network call
       try {
         const cached = localStorage.getItem(PROFILE_ID_KEY)
