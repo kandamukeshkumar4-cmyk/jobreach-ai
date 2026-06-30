@@ -1,8 +1,15 @@
 """
 Scoring worker — wraps career-ops A-F evaluation logic.
 Calls Claude to score each job across 10 dimensions.
+
+Emits a throttled heartbeat during the (long) research+LLM call per job so the
+mission console never goes silent for 30+ seconds. Persists only meaningful
+milestones to the DB (one heartbeat row every ~8s, capped) — the per-second
+visual pulse is rendered client-side from the elapsed clock.
 """
 import json
+import threading
+import time
 import redis
 from celery import Task
 from app.workers.celery_app import celery_app, _redis_url_with_ssl
@@ -13,6 +20,11 @@ from openai import OpenAI
 import structlog
 
 log = structlog.get_logger()
+
+# Heartbeat cadence during a single job's research+LLM call. Frontend stall
+# threshold is 15s, so an 8s cadence keeps it well clear without DB spam.
+_HB_INTERVAL = 8
+_HB_MAX_PER_JOB = 8  # 64s window; after this the frontend's stall UI takes over
 
 DIMENSIONS = [
     ("cv_match",       "CV & Skills Match",         0.25),
@@ -83,15 +95,30 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
         if not job:
             return
 
+        company = job["company"]
+        role = job["title"]
+        total = _scoring_total(r, db, mission_id)
+
         # Stream a per-job heartbeat so the (longest) scoring phase never looks
         # stalled: one "researching" event as each role's deep-dive begins.
         from app.workers.search import _pub
         _pub(r, mission_id, "run",
-             f"Researching {job['company']} — {job['title']}…",
-             meta={"kind": "research", "company": job["company"], "role": job["title"]})
+             f"Researching {company} — {role}…",
+             meta={"kind": "research", "stage": "score", "company": company,
+                   "role": role, "url": job.get("url", ""), "total": total})
 
-        # Call research directly — avoids Celery subtask restrictions
-        research = run_company_research(job["company"], job.get("url", ""))
+        # Start a throttled heartbeat that publishes a DB row every ~8s while the
+        # blocking research+LLM call is in flight. The frontend polls DB events,
+        # so these rows are what keep the console visibly alive between the
+        # "Researching" and "Scored" milestones.
+        stop_hb = _start_scoring_heartbeat(r, mission_id, company, role, total)
+        try:
+            # Call research directly — avoids Celery subtask restrictions.
+            # run_company_research caches results in Redis (24h), so repeat
+            # companies across missions skip the network entirely.
+            research = run_company_research(company, job.get("url", ""))
+        finally:
+            stop_hb()
 
         client = OpenAI(
             api_key=s.nvidia_api_key,
@@ -116,8 +143,8 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
                 "role": "user",
                 "content": SCORE_PROMPT.format(
                     profile=profile_str,
-                    title=job.get("title", ""),
-                    company=job.get("company", ""),
+                    title=role,
+                    company=company,
                     location=job.get("location", ""),
                     description=(job.get("description_snippet") or "")[:3000],
                     research=research_str,
@@ -150,20 +177,22 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
         # carry an honest "n of total" position. Parallel score_job tasks each
         # bump this, so n is monotonic across the whole scoring phase.
         n = r.incr(f"mission:{mission_id}:attempted")
+        eta = _scoring_eta(r, mission_id, n, total)
         progress = {
-            "kind": "score", "index": n, "total": _total_filtered(db, mission_id),
-            "company": job["company"], "role": job["title"],
+            "kind": "score", "stage": "score", "index": n, "total": total,
+            "company": company, "role": role, "url": job.get("url", ""),
             "score": scored["overall_score"], "grade": scored["grade"],
+            "scored": n, "eta_seconds": eta,
         }
         # A/B keep the celebratory match event (with why_fit); every other grade
         # streams a compact "scored" line so the user sees each role land.
         if scored["grade"] in ("A", "B"):
             _pub(r, mission_id, "star",
-                 f"<strong>{scored['grade']} match</strong>: {job['title']} at {job['company']} — {scored['overall_score']}/5.0",
+                 f"<strong>{scored['grade']} match</strong>: {role} at {company} — {scored['overall_score']}/5.0",
                  detail=scored["why_fit"], meta=progress)
         else:
             _pub(r, mission_id, "info",
-                 f"Scored {job['title']} at {job['company']} — {scored['overall_score']}/5.0",
+                 f"Scored {role} at {company} — {scored['overall_score']}/5.0",
                  meta=progress)
 
         _check_mission_complete(db, r, mission_id)
@@ -173,11 +202,87 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
         try:
             from app.workers.search import _pub
             n = r.incr(f"mission:{mission_id}:attempted")
-            _pub(r, mission_id, "warn", f"Scoring skipped for job {job_id}: {exc}",
-                 meta={"kind": "score", "index": n, "total": _total_filtered(db, mission_id)})
+            eta = _scoring_eta(r, mission_id, n, _scoring_total(r, db, mission_id))
+            _pub(r, mission_id, "warn", f"Scoring skipped for {job_id}: {exc}",
+                 meta={"kind": "score", "stage": "score", "index": n,
+                       "total": _scoring_total(r, db, mission_id),
+                       "scored": n, "eta_seconds": eta, "error": str(exc)})
             _check_mission_complete(db, r, mission_id)
         except Exception:
             pass
+
+
+def _scoring_total(r: redis.Redis, db, mission_id: str) -> int:
+    """Dispatched-job count for 'n of total'. Redis first (no DB round-trip),
+    fall back to the mission row."""
+    try:
+        cached = r.hget(f"mission:{mission_id}:rate", "total")
+        if cached:
+            return int(cached)
+    except Exception:
+        pass
+    return _total_filtered(db, mission_id)
+
+
+def _scoring_eta(r: redis.Redis, mission_id: str, done: int, total: int):
+    """Live ETA (seconds) for the scoring phase, from the rolling rate.
+
+    done=0 → no ETA yet. Uses a Redis-setnx start timestamp so the first job to
+    complete records the phase start; subsequent jobs compute remaining/rate.
+    """
+    if total <= 0 or done <= 0 or done >= total:
+        return None
+    try:
+        now_ms = int(time.time() * 1000)
+        # setnx records the phase start on the first job to complete; later jobs
+        # read the same timestamp so the rolling rate is consistent.
+        r.setnx(f"mission:{mission_id}:score_start_ms", now_ms)
+        start_ms = int(r.get(f"mission:{mission_id}:score_start_ms") or now_ms)
+        elapsed_sec = max(1, (now_ms - start_ms) / 1000)
+        rate = done / elapsed_sec  # jobs/sec
+        if rate <= 0:
+            return None
+        remaining = total - done
+        eta = remaining / rate
+        # Cap at 30min so a slow first job doesn't show an absurd ETA.
+        return int(min(max(eta, 1), 60 * 30))
+    except Exception:
+        return None
+
+
+def _start_scoring_heartbeat(r: redis.Redis, mission_id: str, company: str, role: str, total: int):
+    """Publish a throttled 'still working' DB event every ~8s while the calling
+    job's research+LLM call is in flight. Returns a `stop()` callable.
+
+    Rows are capped at _HB_MAX_PER_JOB per job so a hung job can't emit forever —
+    past that window the frontend's 60s stall detection takes over and surfaces a
+    retry affordance. The DB write is the right channel here because the frontend
+    polls the events table (SSE is buffered out on Azure App Service)."""
+    stop_event = threading.Event()
+    start_ms = time.time() * 1000
+
+    def _loop():
+        from app.workers.search import _pub
+        for _ in range(_HB_MAX_PER_JOB):
+            if stop_event.wait(_HB_INTERVAL):
+                return
+            try:
+                done = int(r.get(f"mission:{mission_id}:attempted") or 0)
+                eta = _scoring_eta(r, mission_id, done, total)
+                elapsed = int((time.time() * 1000 - start_ms) / 1000)
+                _pub(r, mission_id, "info",
+                     f"Still scoring {company} — {role}… ({elapsed}s in this role)",
+                     meta={"kind": "heartbeat", "stage": "score", "company": company,
+                           "role": role, "elapsed_job_sec": elapsed,
+                           "index": done, "total": total, "scored": done,
+                           "eta_seconds": eta})
+            except Exception:
+                # Heartbeat must never break the scoring task.
+                return
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    return stop_event.set
 
 
 def _total_filtered(db, mission_id: str) -> int:
@@ -214,5 +319,6 @@ def _check_mission_complete(db, r, mission_id: str):
         from app.workers.search import _pub
         _pub(r, mission_id, "star",
              f"<strong>{strong} strong matches found</strong> (A/B grade) out of {match_count} scored",
-             meta={"strong_matches": strong, "total_scored": match_count})
-        _pub(r, mission_id, "ok", "Mission complete")
+             meta={"stage": "complete", "strong_matches": strong, "total_scored": match_count,
+                   "scored": match_count, "queued": total_filtered})
+        _pub(r, mission_id, "ok", "Mission complete", meta={"stage": "complete"})

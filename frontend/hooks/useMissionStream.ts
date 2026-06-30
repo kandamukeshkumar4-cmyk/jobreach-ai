@@ -10,6 +10,11 @@ export type MissionStreamStatus = 'connecting' | 'running' | 'done' | 'failed';
 interface MissionStreamResult {
   events: MissionEventOut[];
   status: MissionStreamStatus;
+  /** epoch-ms of the most recent event's created_at (backend time). Used by the
+   * console to measure "silence since the backend last spoke" for stall UI. */
+  lastEventAt: number | null;
+  /** Force an immediate poll (used by the 60s "Possible stall" recovery affordance). */
+  refresh: () => void;
 }
 
 export interface MissionStatusMeta {
@@ -91,12 +96,18 @@ async function authHeaders(): Promise<Record<string, string>> {
  * Phase 3: final fetch, then a definitive done/failed status when the mission
  *          row reports terminal — set AFTER the trailing fetch so a zero-event
  *          terminal mission can never get stuck on "connecting"
+ *
+ * `refresh()` re-runs the effect (cancelling any backed-off timer) so the
+ * console's "Possible stall" affordance can demand an immediate poll.
  */
 export function useMissionStream(missionId: string): MissionStreamResult {
   const [events, setEvents] = useState<MissionEventOut[]>([]);
   const [status, setStatus] = useState<MissionStreamStatus>('connecting');
+  const [refreshTick, setRefreshTick] = useState(0);
 
   const cancelRef = useRef(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleRef = useRef(0);
 
   useEffect(() => {
     if (!missionId) return;
@@ -104,11 +115,10 @@ export function useMissionStream(missionId: string): MissionStreamResult {
     setEvents([]);
     setStatus('connecting');
     cancelRef.current = false;
+    idleRef.current = 0;
 
     const seen = new Set<string>();
     const idPath = encodeURIComponent(missionId);
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
-    let idle = 0;
 
     /** Fetch all events, append unseen ones. Returns true if terminal reached. */
     const fetchEvents = async (): Promise<boolean> => {
@@ -125,7 +135,7 @@ export function useMissionStream(missionId: string): MissionStreamResult {
           fresh.forEach((e) => seen.add(eventKey(e)));
           setEvents((prev) => [...prev, ...fresh]);
           setStatus((s) => (s === 'connecting' ? 'running' : s));
-          idle = 0;
+          idleRef.current = 0;
         }
 
         // Completion is determined by scanning ALL events, not just the tail —
@@ -172,10 +182,10 @@ export function useMissionStream(missionId: string): MissionStreamResult {
       }
 
       if (!cancelRef.current) {
-        idle += 1;
+        idleRef.current += 1;
         // Back off once the mission has gone quiet, to stop hammering the API.
-        const delay = idle > 20 ? 10_000 : 3_000;
-        pollTimer = setTimeout(poll, delay);
+        const delay = idleRef.current > 20 ? 10_000 : 3_000;
+        pollTimerRef.current = setTimeout(poll, delay);
       }
     };
 
@@ -183,9 +193,18 @@ export function useMissionStream(missionId: string): MissionStreamResult {
 
     return () => {
       cancelRef.current = true;
-      if (pollTimer) clearTimeout(pollTimer);
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
-  }, [missionId]);
+  }, [missionId, refreshTick]);
 
-  return { events, status };
+  const refresh = () => setRefreshTick((t) => t + 1);
+
+  const lastEventAt = events.length
+    ? (() => {
+        const t = events[events.length - 1]?.created_at;
+        return t ? new Date(t).getTime() : null;
+      })()
+    : null;
+
+  return { events, status, lastEventAt, refresh };
 }
