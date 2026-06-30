@@ -240,7 +240,7 @@ export default function OnboardingPage() {
   const Icon = cfg.icon;
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] flex flex-col">
+    <div className="min-h-[100dvh] bg-[var(--bg)] flex flex-col">
       {/* Top bar */}
       <header className="flex h-16 items-center border-b border-[var(--border)] bg-[var(--surface)] px-8">
         <div className="flex items-center gap-2.5">
@@ -323,8 +323,12 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Form card */}
-          <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] p-7 shadow-lg shadow-black/20">
+          {/* Form card. Keyed by step so each transition replays the entrance
+              animation — gives the wizard a sense of forward motion. */}
+          <div
+            key={step}
+            className="animate-feed-in rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] p-7 shadow-lg shadow-black/20"
+          >
             {/* ── Step 0: Identity ── */}
             {step === 0 && (
               <div className="space-y-5">
@@ -333,7 +337,7 @@ export default function OnboardingPage() {
                     type="text"
                     value={data.full_name}
                     onChange={(e) => update('full_name', e.target.value)}
-                    placeholder="Jane Smith"
+                    placeholder="Priya Raman"
                     autoFocus
                     className="px-4 py-3 text-sm"
                   />
@@ -344,7 +348,7 @@ export default function OnboardingPage() {
                     type="email"
                     value={data.email}
                     onChange={(e) => update('email', e.target.value)}
-                    placeholder="jane@example.com"
+                    placeholder="priya.raman@gmail.com"
                     className="px-4 py-3 text-sm"
                   />
                   <Hint>Used on your resumes as your contact email.</Hint>
@@ -354,7 +358,7 @@ export default function OnboardingPage() {
                     type="url"
                     value={data.linkedin_url}
                     onChange={(e) => update('linkedin_url', e.target.value)}
-                    placeholder="https://linkedin.com/in/jane-smith"
+                    placeholder="https://linkedin.com/in/priya-raman"
                     className="px-4 py-3 text-sm"
                   />
                 </Field>

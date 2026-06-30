@@ -35,6 +35,7 @@ export function BeamsBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const beamsRef = useRef<Beam[]>([]);
   const rafRef = useRef<number>(0);
+  const activeRef = useRef<boolean>(true);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -42,7 +43,7 @@ export function BeamsBackground() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const BEAM_COUNT = 30;
+    const BEAM_COUNT = 15;
 
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
@@ -89,9 +90,11 @@ export function BeamsBackground() {
     }
 
     function animate() {
-      if (!ctx) return;
+      if (!ctx || !activeRef.current) {
+        rafRef.current = requestAnimationFrame(animate);
+        return;
+      }
       ctx.clearRect(0, 0, canvas!.width, canvas!.height);
-      ctx.filter = 'blur(35px)';
       beamsRef.current.forEach((beam, i) => {
         beam.y -= beam.speed;
         beam.pulse += beam.pulseSpeed;
@@ -101,17 +104,24 @@ export function BeamsBackground() {
       rafRef.current = requestAnimationFrame(animate);
     }
 
+    const observer = new IntersectionObserver(
+      ([entry]) => { activeRef.current = entry.isIntersecting; },
+      { threshold: 0 }
+    );
+    observer.observe(canvas);
+
     animate();
 
     return () => {
       window.removeEventListener('resize', resize);
       cancelAnimationFrame(rafRef.current);
+      observer.disconnect();
     };
   }, []);
 
   return (
     <div className="fixed inset-0 z-0 pointer-events-none" aria-hidden>
-      <canvas ref={canvasRef} className="absolute inset-0" style={{ filter: 'blur(15px)' }} />
+      <canvas ref={canvasRef} className="absolute inset-0" style={{ filter: 'blur(20px)' }} />
       <motion.div
         className="absolute inset-0"
         animate={{ opacity: [0.05, 0.15, 0.05] }}

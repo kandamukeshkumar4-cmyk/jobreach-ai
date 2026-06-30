@@ -6,8 +6,8 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, AlertTriangle } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { MissionOut } from '@/lib/types';
-import { useMissionStream } from '@/hooks/useMissionStream';
-import { AgentOrb, type AgentOrbState } from '@/components/ui/agent-orb';
+import { useMissionStream, statusMeta } from '@/hooks/useMissionStream';
+import { AgentOrb } from '@/components/ui/agent-orb';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { MissionFeed } from '@/components/mission/mission-feed';
@@ -25,7 +25,8 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
 
   // Live agent stream (replays history, then streams live events).
   const { events, status: streamStatus } = useMissionStream(id);
-  const live = streamStatus === 'connecting' || streamStatus === 'running';
+  const meta = statusMeta(streamStatus);
+  const live = meta.live;
 
   // Mission metadata. Poll while the stream is live so counters/elapsed stay
   // fresh; stop polling once the stream reports done.
@@ -46,9 +47,10 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
     staleTime: 2000,
   });
 
-  // Pull a fresh copy when the stream completes to capture final totals.
+  // Pull a fresh copy when the stream reaches a terminal state (done or failed)
+  // to capture final totals.
   useEffect(() => {
-    if (streamStatus === 'done') refetch();
+    if (streamStatus === 'done' || streamStatus === 'failed') refetch();
   }, [streamStatus, refetch]);
 
   // Sync the active mission into global app state on mount / id change.
@@ -56,11 +58,10 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
     if (id) setActiveMission(id);
   }, [id, setActiveMission]);
 
-  const orbState: AgentOrbState =
-    streamStatus === 'done' ? 'done' : 'running';
   const shortId = id.slice(0, 8);
   const title = mission?.title ?? (isLoading ? 'Loading…' : 'Mission');
   const done = streamStatus === 'done';
+  const failed = streamStatus === 'failed';
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
@@ -88,10 +89,7 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
         </div>
 
         <div className="ml-auto flex items-center gap-3">
-          <AgentOrb
-            state={orbState}
-            label={done ? 'Done' : streamStatus === 'connecting' ? 'Connecting' : 'Running'}
-          />
+          <AgentOrb state={meta.orbState} label={meta.shortLabel} />
           {done && (
             <Link href={`/matches/${id}`}>
               <Button variant="primary">
@@ -122,8 +120,28 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
         </div>
       )}
 
+      {/* Mission failed — the console freezes red, so give the user an
+          explanation and a clear way forward (not just a tiny status tag). */}
+      {failed && (
+        <div className="flex items-start gap-3 rounded-xl border border-[color-mix(in_srgb,var(--red)_35%,var(--border))] bg-[color-mix(in_srgb,var(--red)_8%,var(--surface))] px-5 py-4">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--red)]" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-[var(--text)]">
+              This mission stopped before finishing
+            </p>
+            <p className="mt-0.5 text-xs text-[var(--muted2)]">
+              The agent hit an error mid-run. Any matches found before it stopped
+              are still saved. You can start a fresh search to try again.
+            </p>
+          </div>
+          <Link href="/missions/new">
+            <Button variant="secondary">Start a new mission</Button>
+          </Link>
+        </div>
+      )}
+
       {/* Live console */}
-      <MissionFeed events={events} status={streamStatus} />
+      <MissionFeed events={events} status={streamStatus} missionTitle={title} />
 
       {/* Meta bar */}
       {isLoading && !mission ? (

@@ -933,7 +933,7 @@ export function LandingPage() {
               style={{ boxShadow: '0 0 60px rgba(0,0,0,0.6)', minHeight: 360 }}>
               <video
                 src="/automation-demo.mp4"
-                autoPlay muted loop playsInline
+                autoPlay muted loop playsInline preload="none"
                 style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
               />
             </FadeUp>
@@ -1067,7 +1067,7 @@ export function LandingPage() {
               style={{ boxShadow: '0 0 60px rgba(0,0,0,0.6)', minHeight: 360 }}>
               <video
                 src="/career-expert.mp4"
-                autoPlay muted loop playsInline
+                autoPlay muted loop playsInline preload="none"
                 style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
               />
             </FadeUp>

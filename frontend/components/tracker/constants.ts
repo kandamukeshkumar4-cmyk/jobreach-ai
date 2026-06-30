@@ -1,5 +1,9 @@
 import type { ApplicationStatus } from '@/lib/types';
 
+/** React Query key for the tracker application list. Shared so every page that
+ *  reads or invalidates the list hits the same cache entry. */
+export const TRACKER_KEY = ['tracker', 'list'] as const;
+
 export interface StatusDef {
   value: ApplicationStatus;
   label: string;

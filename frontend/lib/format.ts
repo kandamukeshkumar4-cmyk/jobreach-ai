@@ -132,3 +132,17 @@ export function cn(...args: ClassValue[]): string {
   args.forEach(walk);
   return out.join(' ');
 }
+
+/**
+ * Normalises an unknown thrown value into a short, displayable message.
+ * Truncates to `max` chars with an ellipsis so a giant backend error body
+ * can't blow out the layout.
+ */
+export function errorMessage(error: unknown, max = 120): string {
+  if (error instanceof Error && error.message) {
+    return error.message.length > max
+      ? `${error.message.slice(0, max)}…`
+      : error.message;
+  }
+  return 'Something went wrong';
+}

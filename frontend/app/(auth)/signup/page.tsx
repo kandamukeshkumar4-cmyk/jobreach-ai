@@ -64,6 +64,8 @@ export default function SignupPage() {
       }
       // If email confirmation is required, there is no active session yet.
       if (data.session) {
+        // Persist the session before navigating so the app layout authenticates.
+        await supabase.auth.getSession()
         router.push('/dashboard')
       } else {
         setNotice('Check your inbox to confirm your email, then sign in.')

@@ -8,46 +8,33 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import {
-  AlertTriangle,
   ArrowDown,
   ArrowUp,
   Columns3,
-  RotateCw,
   Table as TableIcon,
   Target,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { relativeTime, cn } from '@/lib/format';
+import { relativeTime, cn, errorMessage } from '@/lib/format';
 import type {
   ApplicationOut,
   ApplicationStatus,
   ApplicationUpdate,
 } from '@/lib/types';
 import { Button } from '@/components/ui/button';
-import { EmptyState } from '@/components/ui/empty-state';
 import { ScoreRing } from '@/components/ui/score-ring';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { ErrorState } from '@/components/ui/error-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import { KanbanColumn } from '@/components/tracker/kanban-column';
 import { AppDrawer } from '@/components/tracker/app-drawer';
 import {
   ARCHIVED_STATUSES,
   PIPELINE_STATUSES,
+  TRACKER_KEY,
 } from '@/components/tracker/constants';
 
 type ViewMode = 'kanban' | 'table';
-
-const TRACKER_KEY = ['tracker', 'list'] as const;
-
-// Status accent for chrome bar chip
-const STATUS_TOTAL_TONE: Record<string, string> = {
-  evaluated: 'var(--muted2)',
-  applied: 'var(--cyan)',
-  responded: 'var(--violet)',
-  interview: 'var(--amber)',
-  offer: 'var(--green)',
-  rejected: 'var(--red)',
-  discarded: 'var(--muted)',
-};
 
 export default function TrackerPage() {
   const queryClient = useQueryClient();
@@ -67,10 +54,26 @@ export default function TrackerPage() {
     [applications, openId],
   );
 
+  // One optimistic update path shared by drag-drop AND drawer edits. onMutate
+  // cancels in-flight refetches (so a background poll can't clobber the write),
+  // snapshots per-mutation for rollback, and onSettled refetches once the
+  // request resolves — not mid-flight, which is what caused the drop flicker.
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: ApplicationUpdate }) =>
       api.tracker.update(id, payload),
-    onSuccess: () => {
+    onMutate: async ({ id, payload }) => {
+      await queryClient.cancelQueries({ queryKey: TRACKER_KEY });
+      const previous = queryClient.getQueryData<ApplicationOut[]>(TRACKER_KEY);
+      queryClient.setQueryData<ApplicationOut[]>(TRACKER_KEY, (old) =>
+        (old ?? []).map((a) => (a.id === id ? { ...a, ...payload } : a)),
+      );
+      return { previous };
+    },
+    onError: (_err, _vars, ctx) => {
+      const previous = (ctx as { previous?: ApplicationOut[] } | undefined)?.previous;
+      if (previous) queryClient.setQueryData(TRACKER_KEY, previous);
+    },
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: TRACKER_KEY });
       void queryClient.invalidateQueries({ queryKey: ['tracker', 'stats'] });
     },
@@ -92,26 +95,14 @@ export default function TrackerPage() {
     await removeMutation.mutateAsync(id);
   };
 
-  // Drag-to-move between kanban columns. Optimistically write the cache, then
-  // PATCH; on error, roll back to the snapshot.
-  const handleDropCard = async (id: string, target: ApplicationStatus) => {
-    const current = applications.find((a) => a.id === id);
-    if (!current || current.status === target) return;
-
-    const previous = queryClient.getQueryData<ApplicationOut[]>(TRACKER_KEY);
-    queryClient.setQueryData<ApplicationOut[]>(TRACKER_KEY, (old) =>
-      (old ?? []).map((a) => (a.id === id ? { ...a, status: target } : a)),
+  // Drag-to-move between kanban columns — read the row from the LIVE cache (not
+  // the render closure) so a background refetch can't make this act on stale data.
+  const handleDropCard = (id: string, target: ApplicationStatus) => {
+    const current = (queryClient.getQueryData<ApplicationOut[]>(TRACKER_KEY) ?? []).find(
+      (a) => a.id === id,
     );
-
-    try {
-      await api.tracker.update(id, { status: target });
-      void queryClient.invalidateQueries({ queryKey: ['tracker', 'stats'] });
-    } catch {
-      // Roll back on failure.
-      if (previous) queryClient.setQueryData(TRACKER_KEY, previous);
-    } finally {
-      void queryClient.invalidateQueries({ queryKey: TRACKER_KEY });
-    }
+    if (!current || current.status === target) return;
+    updateMutation.mutate({ id, payload: { status: target } });
   };
 
   const showToggle = !isLoading && !isError && applications.length > 0;
@@ -210,6 +201,7 @@ export default function TrackerPage() {
         <KanbanSkeleton />
       ) : isError ? (
         <ErrorState
+          title="Couldn't load your tracker"
           message={errorMessage(error)}
           onRetry={() => void refetch()}
         />
@@ -593,7 +585,7 @@ function KanbanSkeleton() {
       </div>
       <div className="w-full shrink-0 xl:w-[280px]">
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-          <div className="mb-3 h-3 w-20 animate-pulse rounded bg-[var(--card)]" />
+          <Skeleton className="mb-3 h-3 w-20" />
           <CardSkeleton />
         </div>
       </div>
@@ -606,48 +598,11 @@ function CardSkeleton() {
     <div className="flex flex-col gap-3 rounded-[10px] border border-[var(--border)] bg-[var(--card)] p-3.5">
       <div className="flex items-start gap-3">
         <div className="flex-1 space-y-2">
-          <div className="h-3.5 w-32 animate-pulse rounded bg-[var(--surface)]" />
-          <div className="h-3 w-20 animate-pulse rounded bg-[var(--surface)]" />
+          <Skeleton tone="surface" className="h-3.5 w-32" />
+          <Skeleton tone="surface" className="h-3 w-20" />
         </div>
-        <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-[var(--surface)]" />
+        <Skeleton tone="surface" className="h-8 w-8 shrink-0 rounded-full" />
       </div>
     </div>
   );
-}
-
-function ErrorState({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface)] px-6 py-14 text-center">
-      <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-bright)] bg-[var(--card)]">
-        <AlertTriangle className="h-5 w-5 text-[var(--red)]" />
-      </div>
-      <h3 className="mt-4 text-base font-bold tracking-[-0.5px] text-[var(--text)]">
-        Couldn&apos;t load your tracker
-      </h3>
-      <p className="mt-1.5 max-w-sm text-sm text-[var(--muted)]">
-        {message}. The API may be cold-starting — this can take up to 30 seconds.
-      </p>
-      <div className="mt-5">
-        <Button variant="secondary" onClick={onRetry}>
-          <RotateCw className="h-4 w-4" />
-          Retry
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message.length > 120
-      ? `${error.message.slice(0, 120)}…`
-      : error.message;
-  }
-  return 'Something went wrong';
 }

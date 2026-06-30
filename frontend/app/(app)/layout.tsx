@@ -196,15 +196,19 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : ''
-        // 401 = not logged in → let auth handle it; 404 = logged in but no profile → onboard
+        // 404 = logged in but no profile → onboard.
         if (msg.startsWith('404')) {
           router.replace('/onboarding')
           return
         }
-        // 401 / network error → show app (auth pages will handle the rest)
+        // 401 / network error (e.g. session not hydrated yet, or a cold-start
+        // blip) must NOT shove the user to onboarding — that's what bounced
+        // freshly-logged-in users out. Show the app; pages handle their own auth.
+        setReady(true)
+        return
       }
 
-      // No profile found → send to onboarding
+      // Reached only when me() resolved without a profile → send to onboarding.
       router.replace('/onboarding')
     }
 

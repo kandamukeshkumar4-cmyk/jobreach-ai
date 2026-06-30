@@ -1,4 +1,4 @@
-export type AgentOrbState = 'idle' | 'running' | 'done';
+export type AgentOrbState = 'idle' | 'running' | 'done' | 'error';
 
 export interface AgentOrbProps {
   state: AgentOrbState;
@@ -10,6 +10,7 @@ const STATE_COLOR: Record<AgentOrbState, string> = {
   idle: 'var(--muted)',
   running: 'var(--cyan)',
   done: 'var(--green)',
+  error: 'var(--red)',
 };
 
 export function AgentOrb({ state, label, size = 12 }: AgentOrbProps) {

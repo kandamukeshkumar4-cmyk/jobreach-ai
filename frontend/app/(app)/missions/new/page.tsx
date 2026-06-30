@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
@@ -98,6 +98,9 @@ export default function NewMissionPage() {
 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  // Synchronous re-entrancy guard — setSubmitting is async, so a fast double
+  // click can pass the canSubmit check twice and create two missions.
+  const inFlightRef = useRef(false)
 
   // Optionally resolve the active profile's name for display. There is no
   // list-profiles endpoint, so this is purely a best-effort label fetch.
@@ -128,8 +131,9 @@ export default function NewMissionPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!canSubmit || !activeProfileId) return
+    if (!canSubmit || !activeProfileId || inFlightRef.current) return
 
+    inFlightRef.current = true
     setSubmitting(true)
     setSubmitError(null)
 
@@ -162,6 +166,7 @@ export default function NewMissionPage() {
           : 'Failed to launch mission. Please try again.',
       )
       setSubmitting(false)
+      inFlightRef.current = false
     }
   }
 

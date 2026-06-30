@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
     <div
-      className="min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center px-4 py-12"
+      className="min-h-[100dvh] bg-[var(--bg)] flex flex-col items-center justify-center px-4 py-12"
       style={{
         backgroundImage:
           'radial-gradient(60% 50% at 50% 32%, rgba(47,107,255,.18) 0%, rgba(139,107,255,.10) 38%, transparent 70%)',

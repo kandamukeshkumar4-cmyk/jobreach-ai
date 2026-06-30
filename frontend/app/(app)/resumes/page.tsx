@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -7,7 +8,6 @@ import {
   FileSignature,
   RotateCw,
   ExternalLink,
-  AlertTriangle,
   ScanLine,
   ListOrdered,
   ShieldCheck,
@@ -20,6 +20,9 @@ import type { ApplicationOut } from '@/lib/types';
 import { GradeBadge } from '@/components/ui/grade-badge';
 import { AgentOrb } from '@/components/ui/agent-orb';
 import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/ui/error-state';
+import { Skeleton } from '@/components/ui/skeleton';
+import { TRACKER_KEY } from '@/components/tracker/constants';
 
 // ── Pipeline steps ────────────────────────────────────────────────────────────
 
@@ -60,16 +63,13 @@ const PIPELINE_STEPS: ReadonlyArray<{
   },
 ];
 
-// ── Deterministic badge color per company ──────────────────────────────────
-
-const PALETTE = [
-  '#06b6d4', '#8b5cf6', '#10b981', '#f59e0b',
-  '#ef4444', '#ec4899', '#3b82f6', '#14b8a6',
-];
+// Deterministic badge tint per company, locked to the brand trio so document
+// cards never drift off the cyan/violet palette.
+const AVATAR_TINTS = ['var(--cyan)', 'var(--blue)', 'var(--violet)'];
 function companyColor(name: string): string {
   let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % PALETTE.length;
-  return PALETTE[h];
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % AVATAR_TINTS.length;
+  return AVATAR_TINTS[h];
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -82,25 +82,34 @@ interface ResumeDoc {
 
 export default function ResumesPage() {
   const { data, isLoading, isError, refetch, isFetching } = useQuery<ApplicationOut[]>({
-    queryKey: ['tracker', 'list'],
+    queryKey: TRACKER_KEY,
     queryFn: () => api.tracker.list(),
+    // Poll while focused so freshly-tailored resumes appear; React Query already
+    // pauses the interval when the tab is backgrounded.
     refetchInterval: 15_000,
   });
 
-  const docs: ResumeDoc[] = (data ?? [])
-    .filter((a) => Boolean(a.resume_pdf_url) || Boolean(a.cover_letter_pdf_url))
-    .map((application) => ({
-      application,
-      resumeUrl: application.resume_pdf_url ?? undefined,
-      coverLetterUrl: application.cover_letter_pdf_url ?? undefined,
-    }))
-    .sort(
-      (a, b) =>
-        new Date(b.application.applied_at ?? b.application.created_at).getTime() -
-        new Date(a.application.applied_at ?? a.application.created_at).getTime(),
-    );
+  const docs: ResumeDoc[] = useMemo(
+    () =>
+      (data ?? [])
+        .filter((a) => Boolean(a.resume_pdf_url) || Boolean(a.cover_letter_pdf_url))
+        .map((application) => ({
+          application,
+          resumeUrl: application.resume_pdf_url ?? undefined,
+          coverLetterUrl: application.cover_letter_pdf_url ?? undefined,
+        }))
+        .sort(
+          (a, b) =>
+            new Date(b.application.applied_at ?? b.application.created_at).getTime() -
+            new Date(a.application.applied_at ?? a.application.created_at).getTime(),
+        ),
+    [data],
+  );
 
-  const coverLetterCount = docs.filter((d) => Boolean(d.coverLetterUrl)).length;
+  const coverLetterCount = useMemo(
+    () => docs.filter((d) => Boolean(d.coverLetterUrl)).length,
+    [docs],
+  );
 
   return (
     <div className="space-y-6">
@@ -143,7 +152,7 @@ export default function ResumesPage() {
             Document Studio
           </h1>
           <p className="mt-1 max-w-2xl text-[13px] text-[var(--muted)]">
-            Every resume is built through a 16-step ATS pipeline — one tailored DOCX per role. Your real experience, ethically reframed. Nothing is ever fabricated.
+            Every resume runs through a rigorous ATS pipeline, one tailored DOCX per role. Your real experience, ethically reframed. Nothing is ever fabricated.
           </p>
         </div>
 
@@ -191,7 +200,11 @@ export default function ResumesPage() {
         </div>
 
         {isError ? (
-          <ErrorBanner onRetry={() => void refetch()} />
+          <ErrorState
+            variant="banner"
+            title="Couldn't load documents"
+            onRetry={() => void refetch()}
+          />
         ) : isLoading ? (
           <SkeletonGrid />
         ) : docs.length === 0 ? (
@@ -224,8 +237,8 @@ function ResumeCard({ doc }: { doc: ResumeDoc }) {
         {/* Company badge + info */}
         <div className="flex items-start gap-3">
           <div
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white shadow-lg"
-            style={{ backgroundColor: color, boxShadow: `0 4px 16px ${color}44` }}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-bold"
+            style={{ backgroundColor: color, color: 'var(--bg)' }}
           >
             {initial}
           </div>
@@ -349,34 +362,18 @@ function SkeletonGrid() {
       {Array.from({ length: 3 }).map((_, i) => (
         <div key={i} className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[color-mix(in_srgb,var(--card)_70%,transparent)] p-4">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 animate-pulse rounded-lg bg-[var(--surface)]" />
+            <Skeleton tone="surface" className="h-10 w-10 rounded-lg" />
             <div className="flex-1 space-y-2">
-              <div className="h-3.5 w-3/4 animate-pulse rounded bg-[var(--surface)]" />
-              <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--surface)]" />
+              <Skeleton tone="surface" className="h-3.5 w-3/4" />
+              <Skeleton tone="surface" className="h-3 w-1/2" />
             </div>
           </div>
           <div className="h-px bg-[var(--border)]" />
           <div className="flex gap-2">
-            <div className="h-8 w-24 animate-pulse rounded-lg bg-[var(--surface)]" />
+            <Skeleton tone="surface" className="h-8 w-24 rounded-lg" />
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-function ErrorBanner({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div className="flex items-center gap-4 rounded-xl border border-[color-mix(in_srgb,var(--red)_30%,var(--border))] bg-[color-mix(in_srgb,var(--red)_6%,var(--surface))] px-5 py-4">
-      <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--red)]" />
-      <div className="flex-1 min-w-0">
-        <p className="text-[13px] font-semibold text-[var(--text)]">Couldn&apos;t load documents</p>
-        <p className="text-[12px] text-[var(--muted)]">The backend may be cold-starting. Give it a moment then retry.</p>
-      </div>
-      <Button variant="secondary" onClick={onRetry}>
-        <RotateCw className="h-4 w-4" />
-        Retry
-      </Button>
     </div>
   );
 }

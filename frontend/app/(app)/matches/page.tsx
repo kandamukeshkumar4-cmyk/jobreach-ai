@@ -2,13 +2,15 @@
 
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, RotateCw, Target, ArrowRight, Rocket } from 'lucide-react';
+import { Target, ArrowRight, Rocket } from 'lucide-react';
 import { api } from '@/lib/api';
-import { relativeTime } from '@/lib/format';
+import { relativeTime, errorMessage } from '@/lib/format';
 import type { MissionOut } from '@/lib/types';
 import { LiquidGlassCard as Card } from '@/components/ui/liquid-glass';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 
 // Completed missions first (they have matches to browse), then by recency.
@@ -46,7 +48,11 @@ export default function MatchesIndexPage() {
       {isLoading ? (
         <ListSkeleton />
       ) : isError ? (
-        <ErrorState message={errorMessage(error)} onRetry={() => void refetch()} />
+        <ErrorState
+          title="Couldn't load missions"
+          message={errorMessage(error)}
+          onRetry={() => void refetch()}
+        />
       ) : missions.length === 0 ? (
         <Card>
           <EmptyState
@@ -121,50 +127,13 @@ function ListSkeleton() {
           className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] p-5"
         >
           <div className="flex items-start justify-between gap-3">
-            <span className="h-3.5 w-36 animate-pulse rounded bg-[var(--card)]" />
-            <span className="h-5 w-16 animate-pulse rounded-full bg-[var(--card)]" />
+            <Skeleton className="h-3.5 w-36" />
+            <Skeleton className="h-5 w-16 rounded-full" />
           </div>
-          <span className="mt-3 block h-3 w-48 animate-pulse rounded bg-[var(--card)]" />
-          <span className="mt-5 block h-4 w-24 animate-pulse rounded bg-[var(--card)]" />
+          <Skeleton className="mt-3 block h-3 w-48" />
+          <Skeleton className="mt-5 block h-4 w-24" />
         </li>
       ))}
     </ul>
   );
-}
-
-function ErrorState({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface)] px-6 py-14 text-center">
-      <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-bright)] bg-[var(--card)]">
-        <AlertTriangle className="h-5 w-5 text-[var(--red)]" />
-      </div>
-      <h3 className="font-display mt-4 text-base font-bold tracking-[-0.5px] text-[var(--text)]">
-        Couldn&apos;t load missions
-      </h3>
-      <p className="mt-1.5 max-w-sm text-sm text-[var(--muted)]">
-        {message}. The API may be cold-starting — this can take up to 30 seconds.
-      </p>
-      <div className="mt-5">
-        <Button variant="secondary" onClick={onRetry}>
-          <RotateCw className="h-4 w-4" />
-          Retry
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message.length > 120
-      ? `${error.message.slice(0, 120)}…`
-      : error.message;
-  }
-  return 'Something went wrong';
 }

@@ -281,6 +281,14 @@ html {
   .animate-feed-in {
     animation: none;
   }
+
+  /* The live console leans on Tailwind ping/spin for its "alive" affordances.
+     Stage state is still legible via color + shape + label, so it is safe to
+     silence the motion entirely for reduced-motion users. */
+  .mission-console .animate-ping,
+  .mission-console .animate-spin {
+    animation: none;
+  }
 }
 
 /* ── Marquee animations ── */

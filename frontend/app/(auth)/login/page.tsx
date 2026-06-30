@@ -45,6 +45,10 @@ export default function LoginPage() {
         setError(signInError.message)
         return
       }
+      // Wait for the session to be persisted before navigating, otherwise the
+      // (app) layout's profile.me() fires with no Bearer token → 401 → the user
+      // is bounced out of the app on first login (the hydration race).
+      await supabase.auth.getSession()
       router.push('/dashboard')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')

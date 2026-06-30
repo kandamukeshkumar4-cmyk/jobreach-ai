@@ -1,71 +1,47 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AgentOrb } from '@/components/ui/agent-orb';
-import {
-  ChainOfThought,
-  ChainOfThoughtContent,
-  ChainOfThoughtHeader,
-  ChainOfThoughtStep,
-} from '@/components/ui/chain-of-thought';
-import type { MissionEventOut } from '@/lib/types';
-import type { MissionStreamStatus } from '@/hooks/useMissionStream';
-import { FeedItem } from './feed-item';
+import { cn } from '@/lib/format';
+import type { EventType, MissionEventOut } from '@/lib/types';
+import { statusMeta, type MissionStreamStatus } from '@/hooks/useMissionStream';
 
 export interface MissionFeedProps {
   events: MissionEventOut[];
   status: MissionStreamStatus;
+  missionTitle?: string;
 }
 
-type StageId = 'search' | 'verify' | 'research' | 'score';
+// ── Tag config ────────────────────────────────────────────────────────────────
 
-interface StageSpec {
-  id: StageId;
+interface TagSpec {
   label: string;
-  match: RegExp;
+  color: string;
 }
 
-interface SourceProgress {
-  label: string;
-  hint: string;
-  done: boolean;
-  active: boolean;
-  value: number;
-  total: number;
-  tone: 'cyan' | 'green' | 'amber' | 'violet';
-}
-
-interface ParsedMatch {
-  role: string;
-  company: string;
-  score: string;
-  scoreNum: number;
-  detail: string;
-}
-
-const STAGES: StageSpec[] = [
-  { id: 'search', label: 'Searching the open web', match: /exa|semantic|rss|ats|source|posting/i },
-  { id: 'verify', label: 'Verifying live postings', match: /verify|live|dead|closed|pruned/i },
-  { id: 'research', label: 'Deep-researching companies', match: /research|company|funding|culture|sentiment/i },
-  { id: 'score', label: 'Scoring & ranking', match: /scor|rank|match|grade|priorit/i },
-];
-
-const TONE_CLASS: Record<SourceProgress['tone'], string> = {
-  cyan: 'bg-[var(--cyan)]',
-  green: 'bg-[var(--green)]',
-  amber: 'bg-[var(--amber)]',
-  violet: 'bg-[var(--violet)]',
+// Colors reference the Huly tokens in globals.css — single source of truth.
+const TYPE_TAG: Partial<Record<EventType, TagSpec>> = {
+  ok:    { label: 'OK',    color: 'var(--green)' },
+  star:  { label: 'MATCH', color: 'var(--green)' },
+  info:  { label: 'INFO',  color: 'var(--muted2)' },
+  warn:  { label: 'WARN',  color: 'var(--amber)' },
+  error: { label: 'ERR',   color: 'var(--red)' },
 };
 
-// Deterministic bright color per company name
-const COMPANY_PALETTE = [
-  '#06b6d4', '#8b5cf6', '#10b981', '#f59e0b',
-  '#ef4444', '#ec4899', '#3b82f6', '#14b8a6',
-];
-function companyColor(name: string): string {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % COMPANY_PALETTE.length;
-  return COMPANY_PALETTE[h];
+function getTag(event: MissionEventOut): TagSpec {
+  const typeTag = TYPE_TAG[event.event_type];
+  if (typeTag) return typeTag;
+
+  // For 'run' events, infer the stage from message content.
+  const msg = (event.message ?? '').toLowerCase();
+  if (/exa|semantic/.test(msg))                              return { label: 'SEARCH', color: 'var(--amber)' };
+  if (/greenhouse|lever|ashby|smartrecruiters|ats/.test(msg)) return { label: 'BOARD',  color: 'var(--cyan)' };
+  if (/rss|remoteok|workable/.test(msg))                     return { label: 'BOARD',  color: 'var(--cyan)' };
+  if (/filter|eliminat/.test(msg))                           return { label: 'FILTER', color: 'var(--violet)' };
+  if (/verify|live|prune|dead|closed/.test(msg))             return { label: 'VERIFY', color: 'var(--green)' };
+  if (/research|funding|culture|sentiment/.test(msg))        return { label: 'RSRCH',  color: 'var(--violet)' };
+  if (/scor|rank|match|grade|priorit/.test(msg))             return { label: 'SCORE',  color: 'var(--violet)' };
+  if (/profile|archetype|loaded/.test(msg))                  return { label: 'INIT',   color: 'var(--cyan)' };
+  return { label: 'AGENT', color: 'var(--cyan)' };
 }
 
 function cleanHtml(value?: string): string {
@@ -76,607 +52,495 @@ function cleanHtml(value?: string): string {
     .trim();
 }
 
-function eventText(event: MissionEventOut): string {
-  return `${cleanHtml(event.message)} ${cleanHtml(event.detail)}`.trim();
-}
+// ── Pipeline stages ─────────────────────────────────────────────────────────
+// The agent's real method, in order. Each stage "reaches" when a matching event
+// has actually arrived — so progress reflects what happened, never a timer.
 
-/** Parse "A match: Applied AI Engineer at Anthropic — 4.3/5.0" */
-function parseMatchEvent(event: MissionEventOut): ParsedMatch {
-  const text = cleanHtml(event.message).replace(/^[a-f]?\s*match\s*[:]\s*/i, '').trim();
-  const m = text.match(/^(.+?)\s+(?:at|@)\s+(.+?)\s*[—–-]+\s*([\d.]+)/i);
-  const detail = cleanHtml(event.detail);
-  if (m) {
-    return {
-      role: m[1].trim(),
-      company: m[2].trim(),
-      score: m[3],
-      scoreNum: parseFloat(m[3]),
-      detail,
-    };
-  }
-  return { role: text, company: '', score: '--', scoreNum: 0, detail };
-}
+type StageState = 'done' | 'active' | 'pending';
 
-function getActiveStage(events: MissionEventOut[], status: MissionStreamStatus): StageId {
-  if (status === 'done') return 'score';
-  const latest = [...events].reverse().find((event) => event.event_type !== 'ok');
-  const text = latest ? eventText(latest) : '';
-  return [...STAGES].reverse().find((stage) => stage.match.test(text))?.id ?? 'search';
-}
+// Regexes key on the actual phrases the worker emits (search.py / score.py) so
+// an incidental keyword in a job title can't falsely advance the rail. Once a
+// later stage's phrase matches, the earlier ones fill in by position — the
+// agent emits in pipeline order, so that's truthful, not guessed.
+const PIPELINE: ReadonlyArray<{ key: string; label: string; test: RegExp }> = [
+  { key: 'search', label: 'Search', test: /exa returned|semantic search|searching exa/ },
+  { key: 'boards', label: 'Boards', test: /ats feeds returned|scanned [\d,]+ postings|greenhouse|lever|ashby|smartrecruiters/ },
+  { key: 'filter', label: 'Filter', test: /filtered to|filtering/ },
+  { key: 'verify', label: 'Verify', test: /verifying [\d,]+ postings|still live|verified live/ },
+  { key: 'score',  label: 'Score',  test: /\/5\.0|scoring roles|ranking your/ },
+];
 
-function getStageIndex(stageId: StageId): number {
-  return Math.max(0, STAGES.findIndex((stage) => stage.id === stageId));
-}
+interface StageInfo { key: string; label: string; state: StageState }
 
-function hasText(events: MissionEventOut[], pattern: RegExp): boolean {
-  return events.some((event) => pattern.test(eventText(event)));
-}
-
-function extractFirstNumber(events: MissionEventOut[], pattern: RegExp, fallback = 0): number {
-  for (const event of [...events].reverse()) {
-    const match = eventText(event).match(pattern);
-    if (match?.[1]) return Number(match[1].replace(/,/g, ''));
-  }
-  return fallback;
-}
-
-function buildSourceProgress(
+function computeStages(
   events: MissionEventOut[],
-  activeStage: StageId,
-  status: MissionStreamStatus,
-): SourceProgress[] {
-  const exa = extractFirstNumber(events, /exa returned\s+([\d,]+)/i, 0);
-  const ats = extractFirstNumber(events, /ats feeds returned\s+([\d,]+)/i, 0);
-  const rss = extractFirstNumber(events, /rss feeds returned\s+([\d,]+)/i, 0);
-  const scanned = extractFirstNumber(events, /scanned\s+([\d,]+)/i, 0);
-  const filtered = extractFirstNumber(events, /filtered to\s+([\d,]+)/i, 0);
-  const verified = extractFirstNumber(events, /(\d+)\s+verified live/i, 0);
-  const research = extractFirstNumber(events, /researching\s+(\d+)\s+companies/i, 0);
-  const matches = events.filter((event) => event.event_type === 'star').length;
+  done: boolean,
+  failed: boolean,
+): { stages: StageInfo[]; fillPct: number } {
+  const haystacks = events.map(
+    (e) => `${cleanHtml(e.message)} ${cleanHtml(e.detail)}`.toLowerCase(),
+  );
+  let reachedIdx = -1;
+  PIPELINE.forEach((stage, i) => {
+    if (haystacks.some((h) => stage.test.test(h))) reachedIdx = Math.max(reachedIdx, i);
+  });
 
-  return [
-    {
-      label: 'Exa semantic search',
-      hint: 'Semantic web scan',
-      done: exa > 0,
-      active: activeStage === 'search' && exa === 0,
-      value: Math.min(exa, 100),
-      total: 100,
-      tone: 'green',
-    },
-    {
-      label: 'ATS feeds',
-      hint: 'Greenhouse, Lever, Ashby',
-      done: ats > 0,
-      active: activeStage === 'search' && ats === 0,
-      value: ats || (hasText(events, /ats/i) ? 35 : 0),
-      total: Math.max(ats, 1184),
-      tone: 'green',
-    },
-    {
-      label: 'RSS job feeds',
-      hint: 'Remote boards and niche feeds',
-      done: rss > 0,
-      active: activeStage === 'search' && rss === 0 && hasText(events, /rss/i),
-      value: rss,
-      total: Math.max(rss, 45),
-      tone: 'green',
-    },
-    {
-      label: 'Profile filtering',
-      hint: 'Role, location, salary, skills',
-      done: filtered > 0,
-      active: activeStage === 'score' && filtered === 0,
-      value: filtered || (scanned ? Math.round(scanned * 0.25) : 0),
-      total: Math.max(scanned, 1329),
-      tone: 'amber',
-    },
-    {
-      label: 'Live verification',
-      hint: 'Checking if postings still exist',
-      done: verified > 0 || hasText(events, /pruned/i),
-      active: activeStage === 'verify',
-      value: verified || (activeStage === 'verify' ? 28 : 0),
-      total: 60,
-      tone: 'amber',
-    },
-    {
-      label: 'Company research',
-      hint: 'Funding, layoffs, culture signals',
-      done: hasText(events, /research complete|match/i),
-      active: activeStage === 'research',
-      value: hasText(events, /research complete|match/i) ? 30 : research,
-      total: 30,
-      tone: 'violet',
-    },
-    {
-      label: 'Scoring & ranking',
-      hint: 'Ranking best matches',
-      done: status === 'done',
-      active: activeStage === 'score' && status !== 'done',
-      value: status === 'done' ? Math.max(matches, 1) : matches,
-      total: Math.max(matches, 3),
-      tone: 'cyan',
-    },
-  ];
+  const stages: StageInfo[] = PIPELINE.map((stage, i) => {
+    let state: StageState;
+    if (done) state = 'done';
+    else if (i < reachedIdx) state = 'done';
+    // On failure nothing is "active" — the rail freezes where it stopped so the
+    // header's red FAILED isn't contradicted by a pulsing stage.
+    else if (i === reachedIdx) state = failed ? 'pending' : 'active';
+    else state = 'pending';
+    return { key: stage.key, label: stage.label, state };
+  });
+
+  // Fill reflects completed stages only; the active stage counts as a half-step
+  // so the bar nudges forward honestly without ever claiming a fake percentage.
+  const fillPct = done
+    ? 100
+    : reachedIdx < 0
+      ? 4
+      : Math.round(((reachedIdx + 0.5) / PIPELINE.length) * 100);
+
+  return { stages, fillPct };
 }
 
-function getOverallProgress(
-  sourceProgress: SourceProgress[],
-  status: MissionStreamStatus,
-): number {
-  if (status === 'done') return 100;
-  const total = sourceProgress.reduce((sum, item) => {
-    const itemTotal = item.total || 1;
-    return sum + Math.min(1, item.value / itemTotal);
-  }, 0);
-  return Math.min(96, Math.max(8, Math.round((total / sourceProgress.length) * 100)));
+function StageDot({ state }: { state: StageState }) {
+  if (state === 'done') {
+    return (
+      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-[var(--cyan)]">
+        <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-[var(--bg)]" fill="none"
+          stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2.5 6.5 5 9l4.5-5.5" />
+        </svg>
+      </span>
+    );
+  }
+  if (state === 'active') {
+    return (
+      <span className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--cyan)] opacity-30" />
+        <span className="relative h-2 w-2 rounded-full bg-[var(--cyan)]" />
+      </span>
+    );
+  }
+  return <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-[var(--border-bright)]" />;
 }
 
-export function MissionFeed({ events, status }: MissionFeedProps) {
+// ── Match card parser ─────────────────────────────────────────────────────────
+
+interface ParsedMatch {
+  role: string;
+  company: string;
+  score: string;
+  scoreNum: number;
+  initial: string;
+  color: string;
+}
+
+// Stay inside the brand trio (cyan / blue / violet) so avatars never break the
+// color lock — a stable per-company pick keeps each company visually distinct.
+const AVATAR_TINTS = ['var(--cyan)', 'var(--blue)', 'var(--violet)'];
+function hashColor(name: string): string {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % AVATAR_TINTS.length;
+  return AVATAR_TINTS[h];
+}
+
+function parseMatch(event: MissionEventOut): ParsedMatch | null {
+  const raw = cleanHtml(event.message).replace(/^[a-f]?\s*match\s*[:]\s*/i, '').trim();
+  // Greedy role capture splits at the LAST " at "/"@" so a role like
+  // "Manager at Risk at Acme" keeps "Acme" as the company.
+  const m = raw.match(/^(.+)\s+(?:at|@)\s+(.+?)\s*[-–—]+\s*([\d.]+)/i);
+  if (!m) return null;
+  const role = m[1].trim();
+  const company = m[2].trim();
+  const n = parseFloat(m[3]);
+  // Reject garbage: empty role/company, or a non-numeric / out-of-band score.
+  if (!role || !company || Number.isNaN(n)) return null;
+  const scoreNum = Math.min(5, Math.max(0, n));
+  return {
+    role,
+    company,
+    score: scoreNum.toFixed(1),
+    scoreNum,
+    initial: (company.match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase(),
+    color: hashColor(company),
+  };
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function PulsingDot() {
+  return (
+    <span className="relative inline-flex h-2 w-2 shrink-0">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--cyan)] opacity-30" />
+      <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--cyan)]" />
+    </span>
+  );
+}
+
+function SpinIcon() {
+  return (
+    <svg className="animate-spin" width="11" height="11" viewBox="0 0 24 24" fill="none"
+      stroke="var(--cyan)" strokeWidth="2.5" strokeLinecap="round">
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  );
+}
+
+function BlinkingCursor() {
+  return (
+    <div className="flex items-center gap-3 px-5 py-2" style={{ fontFamily: 'var(--font-mono)' }}>
+      <div className="h-1.5 w-1.5 rounded-full bg-white/10 shrink-0" />
+      <span
+        className="text-[13px] text-[var(--subtle)] italic"
+        style={{ fontFamily: 'var(--font-sans)' }}
+      >
+        Searching
+        <span className="mission-cursor ml-1 inline-block h-[14px] w-[5px] translate-y-[2px] bg-[var(--cyan)]" />
+      </span>
+    </div>
+  );
+}
+
+function LogRow({ event, isLatest }: { event: MissionEventOut; isLatest: boolean }) {
+  const { label, color } = getTag(event);
+  const message = cleanHtml(event.message);
+  const detail = cleanHtml(event.detail);
+
+  // A row with no message and no detail is just noise — skip it.
+  if (!message && !detail) return null;
+
+  return (
+    <div
+      className={cn(
+        'animate-feed-in flex items-start gap-3 px-5 py-[7px] border-b border-[var(--border)]',
+        isLatest && 'bg-[color-mix(in_srgb,var(--cyan)_5%,transparent)]',
+      )}
+    >
+      <div
+        className="mt-[7px] h-1.5 w-1.5 rounded-full shrink-0"
+        style={{ backgroundColor: color }}
+      />
+      <div className="flex-1 min-w-0">
+        <span
+          className="mr-2 text-[9.5px] font-semibold tracking-[0.5px] uppercase"
+          style={{ color, fontFamily: 'var(--font-mono)' }}
+        >
+          {label}
+        </span>
+        {/* Rendered as TEXT, never raw HTML. Event messages carry scraped
+            third-party job/company text — injecting it as HTML is a stored-XSS
+            sink. cleanHtml strips any tags so the content stays inert. */}
+        <span
+          className="text-[13px] text-[var(--muted2)] italic leading-[1.65]"
+          style={{ fontFamily: 'var(--font-sans)' }}
+        >
+          {message}
+        </span>
+        {detail && (
+          <div className="mt-0.5 text-[11.5px] text-[var(--muted)] leading-relaxed border-l border-[var(--border-bright)] pl-2 ml-1">
+            {detail}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MatchCard({ match, isNew }: { match: ParsedMatch; isNew: boolean }) {
+  const scoreColor =
+    match.scoreNum >= 4.5 ? 'var(--green)'
+    : match.scoreNum >= 4 ? 'var(--cyan)'
+    : match.scoreNum >= 3.5 ? 'var(--amber)'
+    : 'var(--muted2)';
+  return (
+    <div className="mission-match-card flex items-center gap-3 rounded-xl border border-[var(--border-bright)] bg-[var(--card)] p-3">
+      {/* Dark glyph on a bright brand tint — same contrast move as the design's black-on-green. */}
+      <div
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold"
+        style={{ backgroundColor: match.color, color: 'var(--bg)' }}
+      >
+        {match.initial}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[12px] font-semibold text-[var(--text)]">{match.role}</p>
+        <p className="truncate text-[11px] text-[var(--muted)]">{match.company}</p>
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-0.5">
+        <span className="text-[10px] text-[var(--amber)]">★</span>
+        <span className="text-[12px] font-bold tabular-nums" style={{ color: scoreColor, fontFamily: 'var(--font-mono)' }}>
+          {match.score}
+        </span>
+        {isNew && (
+          <span className="rounded-sm bg-[var(--cyan)] px-1 py-0.5 text-[8px] font-bold tracking-widest text-[var(--bg)]">NEW</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
+export function MissionFeed({ events, status, missionTitle }: MissionFeedProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const prevCountRef = useRef(0);
   const [showJump, setShowJump] = useState(false);
 
+  // Auto-scroll on new events
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior });
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior });
   };
 
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const atBottom = distanceFromBottom < 48;
-    pinnedRef.current = atBottom;
-    setShowJump(!atBottom);
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedRef.current = dist < 48;
+    setShowJump(!pinnedRef.current);
   };
 
   useLayoutEffect(() => {
     const grew = events.length > prevCountRef.current;
     const first = prevCountRef.current === 0 && events.length > 0;
     prevCountRef.current = events.length;
-    if (!grew) return;
-    if (pinnedRef.current) scrollToBottom(first ? 'auto' : 'smooth');
+    if (grew && pinnedRef.current) scrollToBottom(first ? 'auto' : 'smooth');
   }, [events.length]);
 
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => { if (pinnedRef.current) scrollToBottom('auto'); });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const connecting = status === 'connecting';
-  const isEmpty = events.length === 0;
-  const activeStage = useMemo(() => getActiveStage(events, status), [events, status]);
-  const activeStageIndex = getStageIndex(activeStage);
-  const sourceProgress = useMemo(
-    () => buildSourceProgress(events, activeStage, status),
-    [events, activeStage, status],
-  );
-  const overallProgress = getOverallProgress(sourceProgress, status);
-
-  // Progress bar that NEVER stalls — ticks forward even between real events
-  const [displayProgress, setDisplayProgress] = useState(8);
-  useEffect(() => {
-    if (status === 'done') { setDisplayProgress(100); return; }
-    const id = setInterval(() => {
-      setDisplayProgress((p) => {
-        const floor = Math.max(p, overallProgress);
-        return Math.min(floor + 0.4, 95);
-      });
-    }, 500);
-    return () => clearInterval(id);
-  }, [status, overallProgress]);
-
-  const latestEventId = events.at(-1)?.id;
-  const currentStep =
-    status === 'done'
-      ? 'Top matches ready'
-      : STAGES.find((stage) => stage.id === activeStage)?.label ?? 'Searching the open web';
-
-  const starEvents = useMemo(
-    () => events.filter((e) => e.event_type === 'star'),
+  // Extract match events
+  const matches = useMemo(
+    () => events.filter(e => e.event_type === 'star').map(parseMatch).filter(Boolean) as ParsedMatch[],
     [events],
   );
 
+  const connecting = status === 'connecting';
+  const running    = status === 'running';
+  const done       = status === 'done';
+  const failed     = status === 'failed';
+  const latestId   = events.at(-1)?.id;
+
+  const meta = statusMeta(status);
+  const displayTitle = missionTitle ?? 'Job Search Agent';
+
+  // Honest, event-driven pipeline state — no timers.
+  const { stages, fillPct } = useMemo(
+    () => computeStages(events, done, failed),
+    [events, done, failed],
+  );
+  const activeStage = stages.find((s) => s.state === 'active');
+
   return (
-    <div className="relative overflow-hidden rounded-xl border border-[var(--border-bright)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--surface)_94%,white_2%),var(--surface))] shadow-[0_18px_80px_rgba(0,0,0,0.24)]">
-      {/* Chrome bar */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5" aria-hidden="true">
-            <span className="size-2.5 rounded-full bg-[#ff5f57]" />
-            <span className="size-2.5 rounded-full bg-[#febc2e]" />
-            <span className="size-2.5 rounded-full bg-[#28c840]" />
+    <div
+      className="mission-console overflow-hidden rounded-xl border border-[var(--border-bright)] bg-[var(--surface)] shadow-[0_18px_80px_rgba(0,0,0,0.24)]"
+      aria-busy={running || connecting}
+    >
+
+      {/* ── Header ── */}
+      <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_96%,white_2%)] px-5 py-3">
+        {meta.live ? (
+          <PulsingDot />
+        ) : (
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: meta.tone }} />
+        )}
+
+        <span
+          className="truncate text-[11px] text-[var(--muted2)] flex-1"
+          style={{ fontFamily: 'var(--font-mono)', letterSpacing: '1px', textTransform: 'uppercase' }}
+        >
+          {displayTitle} · {meta.label}
+        </span>
+
+        {running && (
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            <SpinIcon />
+            <span
+              className="text-[9.5px] font-semibold text-[var(--cyan)]"
+              style={{ fontFamily: 'var(--font-mono)', letterSpacing: '1.4px' }}
+            >
+              SCANNING…
+            </span>
           </div>
-          <span className="text-[11px] uppercase tracking-[1.8px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
-            AGENT.CONSOLE
+        )}
+        {done && (
+          <span
+            className="ml-auto text-[9.5px] font-semibold text-[var(--green)]"
+            style={{ fontFamily: 'var(--font-mono)', letterSpacing: '1.4px' }}
+          >
+            COMPLETE ✓
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] px-2 py-0.5 text-[11px] text-[var(--muted2)]">
-            <span className={['size-1.5 rounded-full', status === 'done' ? 'bg-[var(--cyan)]' : 'bg-[var(--green)] mission-node-active'].join(' ')} />
-            {status === 'done' ? 'Complete' : status === 'connecting' ? 'Connecting' : 'LIVE'}
+        )}
+        {failed && (
+          <span
+            className="ml-auto text-[9.5px] font-semibold text-[var(--red)]"
+            style={{ fontFamily: 'var(--font-mono)', letterSpacing: '1.4px' }}
+          >
+            FAILED
           </span>
-        </div>
-
-        <div className="order-3 flex w-full min-w-0 items-center gap-2 md:order-none md:ml-3 md:w-auto md:flex-1">
-          {STAGES.map((stage, index) => {
-            const reached = index <= activeStageIndex || status === 'done';
-            const active = stage.id === activeStage && status !== 'done';
-            return (
-              <div key={stage.id} className="flex min-w-0 flex-1 items-center gap-2 md:flex-none">
-                <span
-                  className={['truncate border-b py-1 text-[11px] transition-colors', reached ? 'border-[var(--cyan)] text-[var(--text)]' : 'border-transparent text-[var(--muted)]', active ? 'mission-stage-active' : ''].join(' ')}
-                  style={{ fontFamily: 'var(--font-mono)' }}
-                >
-                  {stage.label}
-                </span>
-                {index < STAGES.length - 1 && <span className="hidden text-[var(--muted)] md:inline" aria-hidden="true">/</span>}
-              </div>
-            );
-          })}
-        </div>
-
-        <span className="ml-auto text-[11px] tabular-nums text-[var(--muted)]">
-          {events.length} {events.length === 1 ? 'event' : 'events'}
+        )}
+        <span
+          className="ml-3 shrink-0 text-[11px] tabular-nums text-[var(--muted)]"
+          style={{ fontFamily: 'var(--font-mono)' }}
+        >
+          {events.length} events
         </span>
       </div>
 
-      {/* Progress bar — always animating */}
-      <div className="border-b border-[var(--border)] px-4 py-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border-bright)] bg-[color-mix(in_srgb,var(--card)_84%,transparent)] px-3 py-1.5">
-            <AgentOrb state={status === 'done' ? 'done' : 'running'} size={10} />
-            <span className="text-[12px] text-[var(--text)]" style={{ fontFamily: 'var(--font-mono)' }}>
-              {currentStep}
-            </span>
-          </div>
-          <div className="h-2 min-w-[180px] flex-1 overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--border-bright)_40%,transparent)]">
-            <div
-              className="mission-progress-fill h-full rounded-full bg-[linear-gradient(90deg,var(--cyan),var(--green),var(--cyan))] transition-[width] duration-700"
-              style={{ width: `${displayProgress}%`, backgroundSize: '200% 100%' }}
-            />
-          </div>
-          <span className="text-[12px] tabular-nums text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
-            {Math.round(displayProgress)}%
-          </span>
+      {/* ── Pipeline rail (honest, event-driven) ── */}
+      <div
+        className="border-b border-[var(--border)] px-5 py-3"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={fillPct}
+        aria-label={
+          done
+            ? 'Mission pipeline complete'
+            : activeStage
+              ? `Mission pipeline: ${activeStage.label} in progress`
+              : 'Mission pipeline starting'
+        }
+      >
+        <ol className="flex items-center gap-2">
+          {stages.map((s, i) => (
+            <li
+              key={s.key}
+              className="flex flex-1 items-center gap-2 last:flex-none"
+              aria-current={s.state === 'active' ? 'step' : undefined}
+            >
+              <span className="flex shrink-0 items-center gap-1.5">
+                <StageDot state={s.state} />
+                <span
+                  className={cn(
+                    'hidden text-[10px] uppercase tracking-[0.8px] sm:inline',
+                    s.state === 'pending'
+                      ? 'text-[var(--subtle)]'
+                      : s.state === 'active'
+                        ? 'text-[var(--cyan)]'
+                        : 'text-[var(--muted2)]',
+                  )}
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                >
+                  {s.label}
+                </span>
+              </span>
+              {i < stages.length - 1 && (
+                <span
+                  className="h-px flex-1 rounded-full transition-colors duration-500"
+                  style={{ background: s.state === 'done' ? 'var(--cyan)' : 'var(--border-bright)' }}
+                />
+              )}
+            </li>
+          ))}
+        </ol>
+
+        {/* Stage labels are hidden below sm; surface the active one as text so
+            mobile users still know what the agent is doing right now. */}
+        {activeStage && (
+          <p
+            className="mt-1.5 text-[10px] uppercase tracking-[0.8px] text-[var(--cyan)] sm:hidden"
+            style={{ fontFamily: 'var(--font-mono)' }}
+          >
+            {activeStage.label}…
+          </p>
+        )}
+
+        {/* Thin fill bar — width is real completed-stage fraction; the shimmer
+            is ambient "working" texture only, and stops under reduced-motion. */}
+        <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--border-bright)_40%,transparent)]">
+          <div
+            className={cn(
+              'h-full rounded-full transition-[width] duration-700',
+              // Red track on failure; brand gradient + shimmer only while live.
+              failed
+                ? 'bg-[var(--red)]'
+                : 'bg-[linear-gradient(90deg,var(--cyan),var(--green),var(--cyan))]',
+              !done && !failed && 'mission-progress-fill',
+            )}
+            style={{ width: `${fillPct}%`, backgroundSize: '200% 100%' }}
+          />
         </div>
       </div>
 
-      <div className="grid min-h-[520px] lg:grid-cols-[minmax(0,1.08fr)_minmax(320px,0.92fr)]">
-        {/* Left: event stream */}
-        <div className="relative border-b border-[var(--border)] lg:border-b-0 lg:border-r">
-          <div
-            ref={scrollRef}
-            onScroll={handleScroll}
-            className="feed-scroll h-[520px] overflow-y-auto py-2"
-            role="log"
-            aria-live="polite"
-            aria-relevant="additions"
-          >
-            {connecting && isEmpty ? (
-              <ConnectingState />
-            ) : isEmpty ? (
-              <IdleEmptyState />
-            ) : (
-              <div className="flex flex-col">
-                {events.map((event, i) => (
-                  <FeedItem
-                    key={event.id ?? `${event.created_at}-${i}`}
-                    event={event}
-                    highlight={Boolean(latestEventId && event.id === latestEventId && status !== 'done')}
-                  />
-                ))}
-                {status === 'running' && <ThinkingRow />}
-              </div>
-            )}
-          </div>
-
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-[linear-gradient(180deg,transparent,var(--surface))]" />
-
-          {status === 'running' && (
-            <div className="absolute bottom-3 left-4 flex items-center gap-2 rounded-full border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_88%,black_12%)] px-3 py-1.5 shadow-lg">
-              <span className="mission-cursor size-2 rounded-sm bg-[var(--cyan)]" />
-              <span className="text-[11px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
-                agent is still searching
-              </span>
+      {/* ── Log stream ── */}
+      <div className="relative">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="h-[420px] overflow-y-auto"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+        >
+          {connecting && events.length === 0 ? (
+            <ConnectingPlaceholder />
+          ) : events.length === 0 ? (
+            <EmptyPlaceholder />
+          ) : (
+            <div className="flex flex-col pt-1 pb-2">
+              {events.map((ev, i) => (
+                <LogRow
+                  key={ev.id ?? `${ev.created_at}-${i}`}
+                  event={ev}
+                  isLatest={ev.id === latestId && !done}
+                />
+              ))}
+              {running && <BlinkingCursor />}
             </div>
           )}
         </div>
 
-        {/* Right: radar + sources */}
-        <aside className="flex min-w-0 flex-col gap-4 p-4">
-          <SearchPulse
-            activeStage={activeStage}
-            sourceProgress={sourceProgress}
-            status={status}
-            starEvents={starEvents}
-          />
-          <VerificationPanel items={sourceProgress} />
-        </aside>
-      </div>
+        {/* Fade out at bottom */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-[linear-gradient(180deg,transparent,var(--surface))]" />
 
-      {/* Bottom: match cards */}
-      <EmergingMatches starEvents={starEvents} active={status !== 'done'} />
-
-      {showJump && (
-        <button
-          type="button"
-          onClick={() => { pinnedRef.current = true; setShowJump(false); scrollToBottom('smooth'); }}
-          className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--border-bright)] bg-[var(--card)] px-3 py-1 text-[11px] font-medium text-[var(--muted2)] shadow-lg transition-colors hover:border-[var(--cyan)] hover:text-[var(--text)]"
-        >
-          Jump to latest
-        </button>
-      )}
-    </div>
-  );
-}
-
-// ── Radar ────────────────────────────────────────────────────────────────────
-
-const RADAR_POSITIONS = [
-  'left-[46%] top-[9%]',
-  'right-[12%] top-[24%]',
-  'right-[10%] bottom-[32%]',
-  'right-[28%] bottom-[9%]',
-  'left-[20%] bottom-[13%]',
-  'left-[8%] top-[38%]',
-];
-
-function SearchPulse({
-  activeStage,
-  sourceProgress,
-  status,
-  starEvents,
-}: {
-  activeStage: StageId;
-  sourceProgress: SourceProgress[];
-  status: MissionStreamStatus;
-  starEvents: MissionEventOut[];
-}) {
-  const scanned = sourceProgress.find((i) => i.label === 'Profile filtering')?.total ?? 0;
-  const verified = sourceProgress.find((i) => i.label === 'Live verification')?.value ?? 0;
-  const filtered = sourceProgress.find((i) => i.label === 'Profile filtering')?.value ?? 0;
-  const companies = sourceProgress.find((i) => i.label === 'Company research')?.value ?? 0;
-
-  // Flash the center whenever a new star event arrives
-  const lastStarId = starEvents.at(-1)?.id ?? '';
-  const [flashKey, setFlashKey] = useState('');
-  useEffect(() => {
-    if (lastStarId) setFlashKey(lastStarId);
-  }, [lastStarId]);
-
-  // Build radar node labels: company initials for found companies, source letters for the rest
-  const parsedMatches = useMemo(() => starEvents.map(parseMatchEvent), [starEvents]);
-  const nodes = RADAR_POSITIONS.map((pos, i) => {
-    const company = parsedMatches[i];
-    if (company && company.company) {
-      return {
-        label: company.company[0].toUpperCase(),
-        title: company.company,
-        color: companyColor(company.company),
-        active: i === parsedMatches.length - 1,
-        isCompany: true,
-      };
-    }
-    const src = sourceProgress[i];
-    return {
-      label: src?.label.slice(0, 1) ?? '?',
-      title: src?.label ?? '',
-      color: null,
-      active: src?.active ?? false,
-      isCompany: false,
-    };
-  });
-
-  return (
-    <section className="rounded-xl border border-[var(--border)] bg-[color-mix(in_srgb,var(--card)_72%,transparent)] p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-[12px] uppercase tracking-[1.6px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
-          Live search pulse
-        </h2>
-        <span className="text-[11px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>
-          {STAGES.find((s) => s.id === activeStage)?.label}
-        </span>
-      </div>
-
-      <div className="relative mx-auto aspect-square max-h-[260px] max-w-[260px] rounded-full border border-[var(--border-bright)] bg-[radial-gradient(circle_at_center,color-mix(in_srgb,var(--cyan)_16%,transparent),transparent_62%)]">
-        {/* Concentric rings */}
-        <div className="mission-radar-grid absolute inset-4 rounded-full border border-[var(--border)]" />
-        <div className="mission-radar-grid absolute inset-12 rounded-full border border-[var(--border)]" />
-        <div className="mission-radar-grid absolute inset-20 rounded-full border border-[var(--border)]" />
-
-        {/* ALWAYS-ROTATING sweep — only speed changes when done */}
-        <div
-          className="mission-radar-sweep absolute inset-1/2 origin-left"
-          style={status === 'done' ? { animationDuration: '6s', opacity: 0.4 } : undefined}
-        />
-
-        {/* Center orb — flashes on every new match */}
-        <div
-          key={flashKey}
-          className={['absolute left-1/2 top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--cyan)] shadow-[0_0_24px_var(--cyan)]', flashKey ? 'mission-center-flash' : ''].join(' ')}
-        />
-
-        {/* Radar nodes — show company initials as matches come in */}
-        {nodes.map((node, i) => (
-          <div
-            key={`node-${i}-${node.label}`}
-            className={['absolute flex size-8 items-center justify-center rounded-full border text-[10px] font-bold text-white shadow-[0_0_16px_color-mix(in_srgb,var(--cyan)_18%,transparent)] transition-all duration-500', RADAR_POSITIONS[i], node.isCompany ? 'mission-node-company border-white/30' : node.active ? 'mission-node-active border-[var(--cyan)] text-[var(--text)] bg-[var(--surface)]' : 'border-[var(--border-bright)] bg-[var(--surface)] text-[var(--text)]'].join(' ')}
-            style={node.isCompany && node.color ? { backgroundColor: node.color, borderColor: node.color, boxShadow: `0 0 20px ${node.color}66` } : undefined}
-            title={node.title}
+        {showJump && (
+          <button
+            type="button"
+            onClick={() => { pinnedRef.current = true; setShowJump(false); scrollToBottom(); }}
+            className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--border-bright)] bg-[var(--card)] px-3 py-1 text-[11px] font-medium text-[var(--muted2)] shadow-lg transition-colors hover:border-[var(--cyan)] hover:text-[var(--text)]"
+            style={{ fontFamily: 'var(--font-mono)' }}
           >
-            {node.label}
+            ↓ Jump to latest
+          </button>
+        )}
+      </div>
+
+      {/* ── Matches ── */}
+      {matches.length > 0 && (
+        <div className="border-t border-[var(--border)] p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <span
+              className="text-[10px] font-bold uppercase tracking-[1.6px] text-[var(--muted2)]"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            >
+              Top matches surfaced
+            </span>
+            <span className="text-[11px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>
+              {matches.length} found
+            </span>
           </div>
-        ))}
-      </div>
-
-      <div className="mt-4 grid grid-cols-4 gap-2">
-        <PulseStat label="Scanned" value={scanned || '--'} />
-        <PulseStat label="Filtered" value={filtered || '--'} />
-        <PulseStat label="Verified" value={verified || '--'} accent />
-        <PulseStat label="Matches" value={parsedMatches.length || '--'} highlight />
-      </div>
-    </section>
-  );
-}
-
-function PulseStat({ label, value, accent = false, highlight = false }: { label: string; value: number | string; accent?: boolean; highlight?: boolean }) {
-  return (
-    <div className={['rounded-lg border px-3 py-2 transition-colors', highlight && typeof value === 'number' && value > 0 ? 'border-[var(--cyan)]/50 bg-[color-mix(in_srgb,var(--cyan)_6%,transparent)]' : 'border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_70%,transparent)]'].join(' ')}>
-      <p className="truncate text-[10px] uppercase tracking-[0.9px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>
-        {label}
-      </p>
-      <p className={['mt-1 text-[18px] font-semibold tabular-nums', accent ? 'text-[var(--green)]' : highlight && typeof value === 'number' && value > 0 ? 'text-[var(--cyan)]' : 'text-[var(--text)]'].join(' ')} style={{ fontFamily: 'var(--font-mono)' }}>
-        {value}
-      </p>
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            {matches.slice(-6).reverse().map((match, i) => (
+              <MatchCard
+                key={`${match.company}-${match.role}-${i}`}
+                match={match}
+                isNew={i < 2 && !done}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// ── Sources panel ─────────────────────────────────────────────────────────────
+// ── Placeholder states ────────────────────────────────────────────────────────
 
-function VerificationPanel({ items }: { items: SourceProgress[] }) {
-  return (
-    <section className="rounded-xl border border-[var(--border)] bg-[color-mix(in_srgb,var(--card)_72%,transparent)] p-4">
-      <h2 className="mb-3 text-[12px] uppercase tracking-[1.6px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
-        Sources & verification
-      </h2>
-      <div className="flex flex-col gap-2">
-        {items.map((item) => {
-          const pct = item.total ? Math.min(100, Math.round((item.value / item.total) * 100)) : 0;
-          return (
-            <div
-              key={item.label}
-              className={['rounded-lg border bg-[color-mix(in_srgb,var(--surface)_76%,transparent)] p-3', item.active ? 'border-[var(--cyan)]/60' : item.done ? 'border-[var(--border-bright)]' : 'border-[var(--border)]'].join(' ')}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-[12px] text-[var(--text)]" style={{ fontFamily: 'var(--font-mono)' }}>
-                    {item.label}
-                  </p>
-                  <p className="mt-0.5 truncate text-[11px] text-[var(--muted)]">{item.hint}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {item.done && <span className="text-[10px] text-[var(--green)]">✓</span>}
-                  <span className="text-[11px] tabular-nums text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
-                    {item.value || '--'} / {item.total || '--'}
-                  </span>
-                </div>
-              </div>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--border-bright)_38%,transparent)]">
-                <div
-                  className={['h-full rounded-full transition-all duration-700', TONE_CLASS[item.tone], item.active ? 'mission-progress-fill' : ''].join(' ')}
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-// ── Match cards ───────────────────────────────────────────────────────────────
-
-function scoreColor(n: number): string {
-  if (n >= 4.5) return 'text-[var(--green)]';
-  if (n >= 4.0) return 'text-[var(--cyan)]';
-  if (n >= 3.5) return 'text-[var(--amber)]';
-  return 'text-[var(--muted2)]';
-}
-
-function EmergingMatches({ starEvents, active }: { starEvents: MissionEventOut[]; active: boolean }) {
-  const matches = useMemo(() => starEvents.map(parseMatchEvent), [starEvents]);
-  const displayed = matches.slice(-6).reverse(); // newest first, up to 6
-
-  const isEmpty = displayed.length === 0;
-
-  return (
-    <section className="border-t border-[var(--border)] p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-[12px] uppercase tracking-[1.6px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
-          Top matches emerging
-        </h2>
-        <span className="text-[11px] text-[var(--muted)]">
-          {matches.length ? `${matches.length} surfaced` : active ? 'warming up…' : 'none yet'}
-        </span>
-      </div>
-
-      {isEmpty ? (
-        <div className="grid gap-3 md:grid-cols-3">
-          {['Scanning job boards…', 'Verifying live postings…', 'Scoring your best matches…'].map((msg, i) => (
-            <div key={i} className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_80%,transparent)] p-3 opacity-60">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--card)]">
-                <span className="mission-cursor inline-block h-3 w-[5px] bg-[var(--cyan)]" />
-              </div>
-              <p className="text-[12px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>{msg}</p>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="grid gap-3 md:grid-cols-3">
-          {displayed.map((match, i) => {
-            const color = match.company ? companyColor(match.company) : '#06b6d4';
-            const initial = match.company?.[0]?.toUpperCase() ?? '?';
-            const isNew = i < 2 && active;
-            return (
-              <div
-                key={`${match.company}-${match.role}-${i}`}
-                className="mission-match-card relative flex flex-col gap-2.5 rounded-lg border border-[var(--border-bright)] bg-[color-mix(in_srgb,var(--card)_82%,transparent)] p-3"
-                style={{ animationDelay: `${i * 60}ms` }}
-              >
-                {isNew && (
-                  <span className="absolute right-2 top-2 rounded-sm bg-[var(--cyan)] px-1.5 py-0.5 text-[9px] font-bold tracking-widest text-[var(--bg)]">
-                    NEW
-                  </span>
-                )}
-                <div className="flex items-center gap-2.5">
-                  {/* Company logo badge */}
-                  <div
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white shadow-lg"
-                    style={{ backgroundColor: color, boxShadow: `0 4px 16px ${color}44` }}
-                  >
-                    {initial}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-[12px] font-semibold text-[var(--text)]">{match.role}</p>
-                    <p className="truncate text-[11px] text-[var(--muted)]">{match.company || '—'}</p>
-                  </div>
-                </div>
-
-                {match.detail && (
-                  <p className="line-clamp-2 text-[11px] leading-relaxed text-[var(--muted)]">
-                    {match.detail}
-                  </p>
-                )}
-
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1 text-[11px] text-[var(--muted2)]">
-                    <span className="text-[var(--amber)]">★</span>
-                    <span className={['font-semibold tabular-nums', scoreColor(match.scoreNum)].join(' ')}>
-                      {match.score}/5.0
-                    </span>
-                  </span>
-                  <span className="text-[10px] text-[var(--muted)]">scorecard forming</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
-
-// ── Utility rows ──────────────────────────────────────────────────────────────
-
-const JOB_SEARCH_THOUGHTS = [
+const SEARCH_THOUGHTS = [
   'Scanning Greenhouse for AI Engineer roles...',
   'Reading job descriptions on Lever boards...',
   'Checking Ashby for remote-first openings...',
@@ -684,145 +548,53 @@ const JOB_SEARCH_THOUGHTS = [
   'Scanning SmartRecruiters job boards...',
   'Reading 100 Exa semantic search results...',
   'Checking ATS feeds: Greenhouse, Lever, Ashby...',
-  'Scanning RSS feeds from RemoteOK and WeWorkRemotely...',
-  'Checking if Anthropic is hiring AI engineers...',
-  'Reading job post at Grafana Labs...',
-  'Verifying posting at Eigen Labs is still live...',
-  'Checking work visa sponsorship at Coinbase...',
-  'Scanning compensation data for Senior AI Engineer roles...',
-  'Reading 1,184 ATS postings for skill alignment...',
-  'Filtering roles by location: US remote...',
-  'Verifying Mistral AI job listing...',
-  'Checking if Ramp is hiring ML engineers...',
-  'Reading company research: funding, headcount, culture...',
-  'Scanning 88 matched roles for seniority fit...',
-  'Verifying 60 postings are still accepting applications...',
-  'Pruning closed and expired job listings...',
-  'Cross-referencing your Python skills with JD requirements...',
+  'Filtering roles by location and salary requirements...',
+  'Verifying live job postings...',
+  'Cross-referencing skills with job descriptions...',
   'Scoring roles by profile alignment...',
-  'Researching top companies for culture signals...',
   'Ranking your best matches by composite score...',
 ];
 
-/** Claude-style typewriter: types a phrase, holds, deletes, types the next. */
-function AgentTypewriter({ size = 'md' }: { size?: 'sm' | 'md' }) {
-  const [displayed, setDisplayed] = useState('');
-  const [idx, setIdx] = useState(() => Math.floor(Math.random() * JOB_SEARCH_THOUGHTS.length));
-  const [phase, setPhase] = useState<'typing' | 'pause' | 'deleting'>('typing');
+function ConnectingPlaceholder() {
+  // ponytail: one index, thought derives from it — no second state to sync.
+  const [idx, setIdx] = useState(0);
 
   useEffect(() => {
-    const target = JOB_SEARCH_THOUGHTS[idx];
-    if (phase === 'typing') {
-      if (displayed.length < target.length) {
-        const t = setTimeout(() => setDisplayed(target.slice(0, displayed.length + 1)), 36);
-        return () => clearTimeout(t);
-      }
-      const t = setTimeout(() => setPhase('pause'), 1400);
-      return () => clearTimeout(t);
-    }
-    if (phase === 'pause') {
-      const t = setTimeout(() => setPhase('deleting'), 300);
-      return () => clearTimeout(t);
-    }
-    if (phase === 'deleting') {
-      if (displayed.length > 0) {
-        const t = setTimeout(() => setDisplayed((d) => d.slice(0, -1)), 16);
-        return () => clearTimeout(t);
-      }
-      setIdx((i) => (i + 1) % JOB_SEARCH_THOUGHTS.length);
-      setPhase('typing');
-    }
-  }, [displayed, phase, idx]);
-
-  const isSmall = size === 'sm';
-  return (
-    <span
-      className={isSmall ? 'text-[11px] text-[var(--muted2)]' : 'text-[12px] text-[var(--muted2)]'}
-      style={{ fontFamily: 'var(--font-mono)' }}
-    >
-      {displayed}
-      <span
-        className={[
-          'ml-[2px] inline-block translate-y-[1px] bg-[var(--cyan)] mission-cursor',
-          isSmall ? 'h-[11px] w-[5px]' : 'h-[13px] w-[6px]',
-        ].join(' ')}
-      />
-    </span>
-  );
-}
-
-function ConnectingChainOfThought() {
-  const VISIBLE = 5; // steps to show at once
-  const STEP_MS = 1800; // ms between step advances
-  const [activeIdx, setActiveIdx] = useState(0);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setActiveIdx((i) => (i + 1) % JOB_SEARCH_THOUGHTS.length);
-    }, STEP_MS);
+    const t = setInterval(() => setIdx((i) => (i + 1) % SEARCH_THOUGHTS.length), 1800);
     return () => clearInterval(t);
   }, []);
 
-  // Build window: last VISIBLE-1 completed + 1 active
-  const windowStart = Math.max(0, activeIdx - (VISIBLE - 1));
-  const steps = JOB_SEARCH_THOUGHTS.slice(windowStart, activeIdx + 1);
-
   return (
-    <ChainOfThought defaultOpen={true} className="w-full">
-      <ChainOfThoughtHeader>Searching for jobs…</ChainOfThoughtHeader>
-      <ChainOfThoughtContent>
-        {steps.map((thought, i) => {
-          const globalIdx = windowStart + i;
-          const isActive = globalIdx === activeIdx;
-          return (
-            <ChainOfThoughtStep
-              key={globalIdx}
-              label={thought}
-              status={isActive ? 'active' : 'complete'}
-            />
-          );
-        })}
-      </ChainOfThoughtContent>
-    </ChainOfThought>
-  );
-}
-
-function ConnectingState() {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-5 px-6">
-      <AgentOrb state="running" size={14} />
-      <p className="text-[13px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
-        Connecting to agent...
-      </p>
-      <div className="w-full max-w-xs">
-        <ConnectingChainOfThought />
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-8 py-12">
+      <div className="relative flex h-10 w-10 items-center justify-center">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--cyan)] opacity-20" />
+        <span className="relative flex h-6 w-6 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--cyan)_20%,transparent)] ring-1 ring-[var(--cyan)]/40">
+          <span className="h-2.5 w-2.5 rounded-full bg-[var(--cyan)]" />
+        </span>
       </div>
+      <p
+        className="text-[13px] text-[var(--muted2)]"
+        style={{ fontFamily: 'var(--font-mono)' }}
+      >
+        Connecting to agent…
+      </p>
+      <p
+        className="max-w-xs text-center text-[12px] italic text-[var(--muted)]"
+        style={{ fontFamily: 'var(--font-sans)' }}
+      >
+        {SEARCH_THOUGHTS[idx]}
+        <span className="mission-cursor ml-1 inline-block h-[13px] w-[5px] translate-y-[2px] bg-[var(--cyan)]" />
+      </p>
     </div>
   );
 }
 
-function IdleEmptyState() {
+function EmptyPlaceholder() {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-8 py-12 text-center">
       <p className="text-[13px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>
         No events yet.
       </p>
-      <AgentTypewriter size="sm" />
-    </div>
-  );
-}
-
-function ThinkingRow() {
-  return (
-    <div
-      className="flex items-center gap-3 px-4 py-1.5"
-      style={{ fontFamily: 'var(--font-mono)' }}
-    >
-      <span className="select-none tabular-nums opacity-0 text-[11px]" aria-hidden="true">
-        00:00:00
-      </span>
-      <span className="mission-cursor inline-block h-3.5 w-[7px] shrink-0 bg-[var(--cyan)]" />
-      <AgentTypewriter size="sm" />
     </div>
   );
 }
