@@ -20,6 +20,17 @@ function GoogleIcon() {
   )
 }
 
+/** Where to send the user after sign-in. Honors the proxy's ?redirectTo=<path>
+ * (set when a logged-out user is bounced off a deep link), but only same-origin
+ * paths — never an open redirect. Read from window so the page stays static
+ * (no useSearchParams Suspense boundary needed). */
+function safeRedirect(): string {
+  if (typeof window === 'undefined') return '/dashboard'
+  const rt = new URLSearchParams(window.location.search).get('redirectTo')
+  if (rt && rt.startsWith('/') && !rt.startsWith('//')) return rt
+  return '/dashboard'
+}
+
 export default function LoginPage() {
   const router = useRouter()
   const [email, setEmail] = useState('')
@@ -49,7 +60,7 @@ export default function LoginPage() {
       // (app) layout's profile.me() fires with no Bearer token → 401 → the user
       // is bounced out of the app on first login (the hydration race).
       await supabase.auth.getSession()
-      router.push('/dashboard')
+      router.push(safeRedirect())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
     } finally {
@@ -64,7 +75,7 @@ export default function LoginPage() {
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+        redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(safeRedirect())}`,
       },
     })
     if (oauthError) {

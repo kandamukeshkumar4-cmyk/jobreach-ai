@@ -43,7 +43,21 @@ export async function proxy(request: NextRequest) {
 
   // Do NOT put code between createServerClient and getUser — the session
   // refresh must run so cookies stay fresh on the response.
-  const { data: { user } } = await supabase.auth.getUser();
+  // getUser() makes a network call to validate the JWT. If Supabase is briefly
+  // unreachable we must NOT lock out an authenticated user: when the request
+  // carries an auth cookie, treat a thrown/errored getUser as "let through" —
+  // the page's client guard and the backend API still enforce auth. Only a
+  // definitive no-session (no auth cookie) gates below.
+  const hasAuthCookie = request.cookies
+    .getAll()
+    .some((c) => c.name.includes('-auth-token'));
+  let user = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    user = data.user ?? null;
+  } catch {
+    if (hasAuthCookie) return res;
+  }
 
   const { pathname } = request.nextUrl;
 

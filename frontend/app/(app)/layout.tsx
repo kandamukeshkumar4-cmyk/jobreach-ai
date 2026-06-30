@@ -173,20 +173,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     async function resolveProfile() {
-      // Auth guard: a logged-out user must never see the app shell. When
-      // Supabase is configured and there is no session, bounce to /login.
-      // (If Supabase isn't configured we skip the guard so the app still runs.)
-      if (supabase) {
-        try {
-          const { data } = await supabase.auth.getSession()
-          if (!data.session) {
-            router.replace('/login')
-            return
-          }
-        } catch {
-          // getSession failed unexpectedly — fall through; pages handle auth.
-        }
-      }
+      // Auth gating is owned by the server-side proxy.ts (cookie session) now, so
+      // a logged-out user never reaches this layout. We deliberately do NOT
+      // re-check getSession() and redirect here: a second client-side guard
+      // racing the server guard on a different read is the classic double-guard
+      // bounce. This layout only resolves the active profile / onboarding.
 
       // Fast path: localStorage hit → trust it, no network call
       try {
