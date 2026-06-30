@@ -6,6 +6,20 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "frontend", "run", "start"],
       "port": 3000
+    },
+    {
+      "name": "frontend-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "3001"],
+      "cwd": "frontend",
+      "port": 3001
+    },
+    {
+      "name": "svelte-design",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "5175", "--host"],
+      "cwd": "svelte-design",
+      "port": 5175
     }
   ]
 }

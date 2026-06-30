@@ -176,14 +176,14 @@ function HeroVideoCard() {
         initial={{ opacity: 0, x: 60 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 1.0, delay: 0.5, ease: [0.76, 0, 0.24, 1] }}
-        style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)',
-          width: '60%', maxWidth: 840,
+        style={{ position: 'absolute', right: 0, top: 0, bottom: 0,
+          width: '65%', maxWidth: 960,
           background: 'rgb(10,10,14)',
           borderRadius: '24px 0 0 24px',
-          border: '1px solid rgba(255,255,255,0.1)',
+          border: '1px solid rgba(255,255,255,0.08)',
           borderRight: 'none',
-          boxShadow: '-40px 0 100px rgba(0,0,0,0.9)',
-          overflow: 'hidden', height: 540, zIndex: 4 }}>
+          boxShadow: '-60px 0 120px rgba(0,0,0,0.95)',
+          overflow: 'hidden', zIndex: 4 }}>
 
         {/* Chrome header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px',
