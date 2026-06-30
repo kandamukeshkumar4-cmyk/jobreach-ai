@@ -122,6 +122,29 @@ def _reconcile_if_stalled(db, mission: dict) -> dict:
 async def create_mission(payload: MissionCreate, db=Depends(get_db)):
     """Create and immediately queue a new agent mission."""
     from app.workers.search import run_mission
+    from datetime import datetime, timezone, timedelta
+
+    # One mission at a time (per profile): refuse to start a new one while the
+    # previous is still in flight. A mission older than 5 min still marked
+    # running/pending is treated as stale (dead worker) and does NOT block —
+    # otherwise a crash would lock the user out permanently. Missions now target
+    # <2 min, so 5 min is a safe staleness cutoff.
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    active = (
+        db.table("missions")
+        .select("id")
+        .eq("profile_id", payload.profile_id)
+        .in_("status", ["pending", "running"])
+        .gte("created_at", cutoff)
+        .execute()
+        .data
+        or []
+    )
+    if active:
+        raise HTTPException(
+            409,
+            "A mission is already running — let it finish before starting another.",
+        )
 
     row = {
         "profile_id": payload.profile_id,

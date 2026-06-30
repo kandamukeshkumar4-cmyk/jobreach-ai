@@ -243,3 +243,67 @@ bounded to `SCORE_CAP*2`).
 None blocking the hard gates. The only open items are the visual/live-run
 verifications listed above, which require either a headed browser or backend
 secrets (a task stop-condition).
+
+---
+
+## Pass: backend <2-min surgery + critical fixes (opus session, not committed)
+
+Goal: missions complete start→end under 2 min; one mission at a time; fix the critical concurrency bugs from the 6-agent review.
+
+### Changed (backend only this pass — NOT committed, NOT deployed)
+- `backend/app/database.py` — added `new_db()` (fresh, uncached Supabase client). The lru_cache singleton is shared-thread-unsafe across the threads pool (flagged by 4/6 review agents) — the #1 reason scoring ran serial.
+- `backend/app/workers/search.py` — `_pub` and `run_mission` now use `new_db()` (per-call/per-task client, thread-safe). `SCORE_CAP 30 → 15`. `_parallel_flatten` now submit+`as_completed` (was `pool.map`, which the docstring lied about). `_verify_liveness` rebuilds live jobs in ORIGINAL candidate order (priority preserved through liveness). Filter event emits `filtered_out`; liveness emits `dead_pruned` (both keep `pruned` for back-compat).
+- `backend/app/workers/research.py` — dropped the slow Jina/Glassdoor fetch AND the separate 70B extract call. Now ONE fast Exa call → raw snippet handed to the scoring LLM via `summary`. Halves LLM calls per role. Exa timeout 20→8s. Dict shape preserved (UI safe).
+- `backend/app/workers/score.py` — `new_db()` per task; heartbeat now wraps research + LLM + JSON parse (was only research) with `subphase` research/llm; `_check_mission_complete` has an atomic `setnx` completion lock (no more duplicate "Mission complete").
+- `backend/app/api/missions.py` — one-mission-at-a-time: `create_mission` returns 409 ("A mission is already running…") if the profile has a pending/running mission < 5 min old (5-min staleness escape hatch so a dead worker can't lock the user out).
+
+### Verified this pass
+- `python -m compileall -q backend/app` → **exit 0**.
+
+### NOT verified / NOT done (next pass)
+- Frontend build / eslint NOT re-run this pass (no frontend files touched this pass).
+- Frontend fixes NOT done: `refresh()` wipes feed (useMissionStream), clock-skew stall detection, `useCountUp` stale ref, ScoringTracker count>total, counter labels for filtered_out/dead_pruned, mockup stall unreachable, login `?redirectTo=`.
+- Auth proxy fixes NOT done: getUser fail-closed lockout, double-guard bounce, onboarding redirect loop.
+- NO real backend/prod mission run — <2 min target is DESIGNED-FOR but UNVERIFIED (needs a deploy, which is not authorized).
+- Frontend `?redirectTo=` 409 handling for the one-mission lock not wired.
+
+### Git state
+HEAD = 036541a (auth proxy). All the above are UNCOMMITTED working-tree edits on top, mixed with the parallel session's uncommitted mission-console work. Nothing pushed/deployed/merged.
+
+NOT a closed loop: heartbeat-covers-LLM ✓ and priority-order ✓ and counter-semantics(backend) ✓ and compile ✓, but browser mockup behavior UNVERIFIED, frontend/auth fixes pending, no prod run.
+
+---
+
+## Pass: frontend + auth fixes + browser verification (opus session, not committed)
+
+### Changed this pass (uncommitted)
+- `frontend/hooks/useMissionStream.ts` — `refresh()` no longer re-runs the effect (added `pollRef`, removed `refreshTick` from deps) → "Check for update" no longer wipes the feed. `lastEventAt` now a CLIENT-received timestamp (kills stall clock-skew).
+- `frontend/components/mission/mission-feed.tsx` —
+  - **CRITICAL CRASH FIX**: `phaseKey` did `PIPELINE[reachedIdx].key`; once a `stage:"complete"` event lands reachedIdx=5 (out of bounds for PIPELINE 0–4) → `TypeError reading 'key'` → the console crashed on EVERY completed mission. Now clamped. (Found via browser verification.)
+  - `useCountUp` tweens from the on-screen value (valRef), not a stale start → no backward snap.
+  - `deriveCounters` reads `filtered_out`/`dead_pruned` (stage-based back-compat for old `pruned`); "Dead"/"Dead links" counter = deadPruned.
+  - `ScoringTracker` clamps count ≤ total (no "4 / 3").
+- `frontend/proxy.ts` — `getUser()` wrapped: on network error WITH an auth cookie, fail-OPEN (don't lock out logged-in users on a Supabase blip).
+- `frontend/app/(auth)/login/page.tsx` — honors `?redirectTo=` (same-origin only) for both email + Google.
+- `frontend/app/(app)/layout.tsx` — removed the client-side redirect-to-/login (proxy owns gating now) → kills the double-guard bounce + onboarding loop.
+- `frontend/app/(app)/missions/new/page.tsx` — 409 → friendly "A mission is already running…".
+- `frontend/app/mockups/mission-console/page.tsx` — reverted my render-time-ref stamp experiment (added lint debt); stall is reachable on pause anyway.
+
+### Verified this pass
+- `npx tsc --noEmit` (dev server stopped) → clean before; the dev-server `.next/dev` types are generated noise.
+- `npm run build` → **exit 0**, Proxy (Middleware) registered, 17 routes, `/login` still static.
+- focused eslint → 8 errors, all PRE-EXISTING patterns (parallel mission-feed memoization/purity, useMissionStream reset block, mockup Date.now-in-render, layout/missions-new predate these edits). My edits added at most +1 set-state-in-effect (the reset block). NOT lint-green.
+- **Browser (real React render via preview_eval DOM inspection, not HTML grep):**
+  - a) score phase appears ✓
+  - b) heartbeat/current action updates ✓ ("Still scoring Stripe… (8s in this role)")
+  - c) 15s stall banner appears on pause ✓ ("Still working — … (00:33 since last event)")
+  - d) 60s possible-stall + "Check for update" button ✓ ("Possible stall — no backend update for 01:00.")
+  - e) completion summary ✓ (Mission complete + Top 3 matches), AFTER the crash fix.
+
+### Still unverified
+- NO real prod mission run — the <2 min target is DESIGNED-FOR, UNPROVEN (needs a deploy; not authorized).
+- refresh-no-wipe verified by CODE (hook restructure) but not against a live stalled backend mission (mockup uses static data).
+- Thundering-herd research lock not added (Exa call is now cheap ~3-5s, so duplicate cost is bounded; noted, not fixed).
+
+### Git state
+HEAD = 036541a. Everything above + the backend pass are UNCOMMITTED working-tree edits, mixed with the parallel session's mission-console work. Nothing pushed/deployed/merged.

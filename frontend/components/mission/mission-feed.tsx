@@ -155,7 +155,9 @@ interface Counters {
   scanned?: number;
   filtered?: number;
   verified?: number;
-  pruned?: number;
+  filteredOut?: number;  // removed by profile/filter rules
+  deadPruned?: number;   // removed by liveness (dead/closed links)
+  pruned?: number;       // legacy: old events overloaded this for both
   queued?: number;
   scored?: number;
   strong?: number;
@@ -175,8 +177,19 @@ function deriveCounters(events: MissionEventOut[], mission: MissionOut | undefin
     if (filtered != null) c.filtered = filtered;
     const verified = num(m.verified);
     if (verified != null) c.verified = verified;
-    const pruned = num(m.pruned) ?? num(m.dead_pruned);
-    if (pruned != null) c.pruned = pruned;
+    const stage = String(m.stage ?? '');
+    const filteredOut = num(m.filtered_out);
+    if (filteredOut != null) c.filteredOut = filteredOut;
+    const deadPruned = num(m.dead_pruned);
+    if (deadPruned != null) c.deadPruned = deadPruned;
+    const pruned = num(m.pruned);
+    if (pruned != null) {
+      c.pruned = pruned;
+      // Back-compat: old events overloaded `pruned` for both filter and liveness.
+      // Disambiguate by pipeline stage so old + new streams both read cleanly.
+      if (filteredOut == null && stage === 'filter') c.filteredOut = pruned;
+      if (deadPruned == null && stage === 'verify') c.deadPruned = pruned;
+    }
     const queued = num(m.queued);
     if (queued != null) c.queued = queued;
     const scored = num(m.scored) ?? num(m.total_scored);
@@ -374,25 +387,25 @@ function scoreColorOf(n: number): string {
  */
 function useCountUp(target?: number): number {
   const [val, setVal] = useState(target ?? 0);
-  const fromRef = useRef(target ?? 0);
+  // valRef always holds the value currently ON SCREEN (updated every tick), so a
+  // new target mid-animation tweens from where the number actually is — not from
+  // a stale animation-start value (which made counters snap backward).
+  const valRef = useRef(target ?? 0);
   useEffect(() => {
     if (target == null) return;
-    const from = fromRef.current;
+    const from = valRef.current;
     if (from === target) return;
-    if (reduceMotion()) { setVal(target); fromRef.current = target; return; }
+    if (reduceMotion()) { valRef.current = target; setVal(target); return; }
     const steps = 24;
     let i = 0;
     const id = setInterval(() => {
       i += 1;
       const p = i / steps;
       const eased = 1 - Math.pow(1 - p, 3);
-      if (i >= steps) {
-        setVal(target);
-        fromRef.current = target;
-        clearInterval(id);
-      } else {
-        setVal(Math.round(from + (target - from) * eased));
-      }
+      const next = i >= steps ? target : Math.round(from + (target - from) * eased);
+      valRef.current = next;
+      setVal(next);
+      if (i >= steps) clearInterval(id);
     }, 25);
     return () => clearInterval(id);
   }, [target]);
@@ -727,7 +740,7 @@ function CounterStrip({ counters }: { counters: Counters }) {
     { label: 'Scanned', value: counters.scanned, color: 'var(--text)' },
     { label: 'Filtered', value: counters.filtered, color: 'var(--text)' },
     { label: 'Verified', value: counters.verified, color: 'var(--green)' },
-    { label: 'Pruned', value: counters.pruned, color: 'var(--amber)' },
+    { label: 'Dead', value: counters.deadPruned ?? counters.pruned, color: 'var(--amber)' },
     { label: 'Scored', value: counters.scored, color: 'var(--cyan)' },
     { label: 'Strong', value: counters.strong, color: 'var(--violet)' },
   ];
@@ -761,7 +774,10 @@ function CounterCell({ label, value, color }: { label: string; value?: number; c
 // ── Scoring tracker (the centerpiece — real n/total, kills the "stuck" feeling) ─
 
 function ScoringTracker({ scoring, live }: { scoring: ScoringInfo; live: boolean }) {
-  const { total, count, rows, current } = scoring;
+  const { total, rows, current } = scoring;
+  // Never let the counter read past the total (e.g. "4 / 3") if a stray event
+  // over-counts; clamp so the header, bar, and active flag stay consistent.
+  const count = total > 0 ? Math.min(scoring.count, total) : scoring.count;
   const pct = total > 0 ? Math.min(100, Math.round((count / total) * 100)) : 0;
   const recent = rows.slice(-5).reverse();
   const active = live && count < total;
@@ -879,7 +895,7 @@ function CompletionSummary({
         <SummaryStat label="Verified" value={counters.verified} />
         <SummaryStat label="Scored" value={counters.scored} />
         <SummaryStat label="Strong" value={counters.strong} color="var(--violet)" />
-        <SummaryStat label="Pruned" value={counters.pruned} color="var(--amber)" />
+        <SummaryStat label="Dead links" value={counters.deadPruned ?? counters.pruned} color="var(--amber)" />
       </div>
       {top3.length > 0 && (
         <div className="mt-3">
@@ -999,7 +1015,14 @@ export function MissionFeed({ events, status, mission, missionTitle, lastEventAt
   // ── Derivations ──
   const { stages, reachedIdx, fillPct } = useMemo(() => computeStages(events, done, failed), [events, done, failed]);
   const activeStage = stages.find((s) => s.state === 'active');
-  const phaseKey = activeStage?.key ?? (reachedIdx >= 0 ? PIPELINE[reachedIdx].key : 'search');
+  // reachedIdx can be PIPELINE.length (5) once a `stage:"complete"` event lands,
+  // which is OUT OF BOUNDS for PIPELINE (0–4) — guard it, or the console crashes
+  // on every completed mission (TypeError: reading 'key' of undefined).
+  const phaseKey =
+    activeStage?.key ??
+    (reachedIdx >= 0
+      ? PIPELINE[Math.min(reachedIdx, PIPELINE.length - 1)]?.key ?? 'score'
+      : 'search');
 
   // `sources` isn't in the typed MissionOut contract — probe defensively.
   const rawSources = (mission as unknown as { sources?: unknown } | undefined)?.sources;

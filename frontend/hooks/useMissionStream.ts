@@ -103,17 +103,24 @@ async function authHeaders(): Promise<Record<string, string>> {
 export function useMissionStream(missionId: string): MissionStreamResult {
   const [events, setEvents] = useState<MissionEventOut[]>([]);
   const [status, setStatus] = useState<MissionStreamStatus>('connecting');
-  const [refreshTick, setRefreshTick] = useState(0);
+  // Client-side timestamp of when we last RECEIVED a fresh event. Using client
+  // time (not the backend created_at) makes stall detection immune to
+  // client/server clock skew.
+  const [lastReceivedAt, setLastReceivedAt] = useState<number | null>(null);
 
   const cancelRef = useRef(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleRef = useRef(0);
+  // Holds the live poll() so refresh() can trigger an immediate poll WITHOUT
+  // re-running the effect (which would reset events/status and blank the feed).
+  const pollRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!missionId) return;
 
     setEvents([]);
     setStatus('connecting');
+    setLastReceivedAt(null);
     cancelRef.current = false;
     idleRef.current = 0;
 
@@ -135,6 +142,7 @@ export function useMissionStream(missionId: string): MissionStreamResult {
           fresh.forEach((e) => seen.add(eventKey(e)));
           setEvents((prev) => [...prev, ...fresh]);
           setStatus((s) => (s === 'connecting' ? 'running' : s));
+          setLastReceivedAt(Date.now());
           idleRef.current = 0;
         }
 
@@ -189,22 +197,25 @@ export function useMissionStream(missionId: string): MissionStreamResult {
       }
     };
 
+    // Expose an immediate-poll trigger that reuses THIS effect's closure (same
+    // `seen` set, same events) — so the stall "Check for update" button forces a
+    // fetch without resetting the feed.
+    pollRef.current = () => {
+      if (cancelRef.current) return;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      idleRef.current = 0;
+      poll();
+    };
+
     poll();
 
     return () => {
       cancelRef.current = true;
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
-  }, [missionId, refreshTick]);
+  }, [missionId]);
 
-  const refresh = () => setRefreshTick((t) => t + 1);
+  const refresh = () => pollRef.current();
 
-  const lastEventAt = events.length
-    ? (() => {
-        const t = events[events.length - 1]?.created_at;
-        return t ? new Date(t).getTime() : null;
-      })()
-    : null;
-
-  return { events, status, lastEventAt, refresh };
+  return { events, status, lastEventAt: lastReceivedAt, refresh };
 }

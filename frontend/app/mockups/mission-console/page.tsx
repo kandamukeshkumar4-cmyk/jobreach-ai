@@ -75,6 +75,9 @@ export default function MissionConsoleMockup() {
 
   const done = n >= SCRIPT.length;
   const status: MissionStreamStatus = n === 0 ? 'connecting' : done ? 'done' : 'running';
+  // Frozen on pause: the mockup stops re-rendering when paused, so this stays
+  // put while the console's clock ticks on — silence grows and the stall banners
+  // become reachable to eyeball.
   const lastEventAt = events.length
     ? new Date(events[events.length - 1].created_at).getTime()
     : null;

@@ -13,7 +13,7 @@ import time
 import redis
 from celery import Task
 from app.workers.celery_app import celery_app, _redis_url_with_ssl
-from app.database import get_db
+from app.database import new_db
 from app.config import get_settings
 from app.workers.research import run_company_research
 from openai import OpenAI
@@ -88,7 +88,7 @@ def score_to_grade(score: float) -> str:
 def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
     s = get_settings()
     r = redis.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
-    db = get_db()
+    db = new_db()  # per-thread client — the shared singleton races under the threads pool
 
     try:
         job = db.table("jobs").select("*").eq("id", job_id).single().execute().data
@@ -111,54 +111,59 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
         # blocking research+LLM call is in flight. The frontend polls DB events,
         # so these rows are what keep the console visibly alive between the
         # "Researching" and "Scored" milestones.
-        stop_hb = _start_scoring_heartbeat(r, mission_id, company, role, total)
+        # Heartbeat now wraps the ENTIRE blocking section — research AND the LLM
+        # call AND JSON parse — so the feed can't go silent during either phase
+        # (the LLM call is the longest). subphase tells the UI which step we're in
+        # without exposing any chain-of-thought.
+        phase = {"sub": "research"}
+        stop_hb = _start_scoring_heartbeat(r, mission_id, company, role, total, phase)
         try:
-            # Call research directly — avoids Celery subtask restrictions.
-            # run_company_research caches results in Redis (24h), so repeat
-            # companies across missions skip the network entirely.
+            # run_company_research caches per company (24h) and is now a single
+            # fast Exa call (no separate LLM), so repeat companies skip the network.
             research = run_company_research(company, job.get("url", ""))
+
+            client = OpenAI(
+                api_key=s.nvidia_api_key,
+                base_url="https://integrate.api.nvidia.com/v1",
+            )
+
+            profile_str = json.dumps({
+                "name": profile.get("full_name"),
+                "skills": profile.get("skills", []),
+                "years_experience": profile.get("years_experience"),
+                "target_roles": profile.get("target_roles", []),
+                "archetypes": profile.get("archetypes", []),
+                "resume_snippet": (profile.get("resume_markdown") or "")[:2000],
+            }, indent=2)
+
+            research_str = json.dumps(research or {}, indent=2)[:1200]
+
+            phase["sub"] = "llm"
+            message = client.chat.completions.create(
+                model="meta/llama-3.3-70b-instruct",
+                max_tokens=1024,
+                messages=[{
+                    "role": "user",
+                    "content": SCORE_PROMPT.format(
+                        profile=profile_str,
+                        title=role,
+                        company=company,
+                        location=job.get("location", ""),
+                        description=(job.get("description_snippet") or "")[:3000],
+                        research=research_str,
+                    ),
+                }],
+            )
+
+            raw = message.choices[0].message.content.strip()
+            # Strip markdown fences if present
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            scored = json.loads(raw)
         finally:
             stop_hb()
-
-        client = OpenAI(
-            api_key=s.nvidia_api_key,
-            base_url="https://integrate.api.nvidia.com/v1",
-        )
-
-        profile_str = json.dumps({
-            "name": profile.get("full_name"),
-            "skills": profile.get("skills", []),
-            "years_experience": profile.get("years_experience"),
-            "target_roles": profile.get("target_roles", []),
-            "archetypes": profile.get("archetypes", []),
-            "resume_snippet": (profile.get("resume_markdown") or "")[:2000],
-        }, indent=2)
-
-        research_str = json.dumps(research or {}, indent=2)[:1000]
-
-        message = client.chat.completions.create(
-            model="meta/llama-3.3-70b-instruct",
-            max_tokens=1024,
-            messages=[{
-                "role": "user",
-                "content": SCORE_PROMPT.format(
-                    profile=profile_str,
-                    title=role,
-                    company=company,
-                    location=job.get("location", ""),
-                    description=(job.get("description_snippet") or "")[:3000],
-                    research=research_str,
-                ),
-            }],
-        )
-
-        raw = message.choices[0].message.content.strip()
-        # Strip markdown fences if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        scored = json.loads(raw)
 
         # Persist match
         match_row = {
@@ -250,7 +255,7 @@ def _scoring_eta(r: redis.Redis, mission_id: str, done: int, total: int):
         return None
 
 
-def _start_scoring_heartbeat(r: redis.Redis, mission_id: str, company: str, role: str, total: int):
+def _start_scoring_heartbeat(r: redis.Redis, mission_id: str, company: str, role: str, total: int, phase: dict = None):
     """Publish a throttled 'still working' DB event every ~8s while the calling
     job's research+LLM call is in flight. Returns a `stop()` callable.
 
@@ -270,10 +275,12 @@ def _start_scoring_heartbeat(r: redis.Redis, mission_id: str, company: str, role
                 done = int(r.get(f"mission:{mission_id}:attempted") or 0)
                 eta = _scoring_eta(r, mission_id, done, total)
                 elapsed = int((time.time() * 1000 - start_ms) / 1000)
+                sub = (phase or {}).get("sub")
+                verb = "Reading company signals for" if sub == "research" else "Scoring"
                 _pub(r, mission_id, "info",
-                     f"Still scoring {company} — {role}… ({elapsed}s in this role)",
-                     meta={"kind": "heartbeat", "stage": "score", "company": company,
-                           "role": role, "elapsed_job_sec": elapsed,
+                     f"{verb} {company} — {role}… ({elapsed}s in this role)",
+                     meta={"kind": "heartbeat", "stage": "score", "subphase": sub,
+                           "company": company, "role": role, "elapsed_job_sec": elapsed,
                            "index": done, "total": total, "scored": done,
                            "eta_seconds": eta})
             except Exception:
@@ -308,6 +315,15 @@ def _check_mission_complete(db, r, mission_id: str):
     total_filtered = mission["total_filtered"] or 0
 
     if total_filtered and attempted >= total_filtered:
+        # Atomic guard: only the FIRST thread to claim completion flips status and
+        # emits the terminal events. Without it, several near-simultaneous final
+        # score threads each pass the gate → duplicate "Mission complete".
+        if not r.setnx(f"mission:{mission_id}:completed_lock", 1):
+            return
+        try:
+            r.expire(f"mission:{mission_id}:completed_lock", 3600)
+        except Exception:
+            pass
         match_count = len(db.table("matches").select("id").eq("mission_id", mission_id).execute().data or [])
         strong = len(db.table("matches").select("id").eq("mission_id", mission_id).in_("grade", ["A", "B"]).execute().data or [])
 

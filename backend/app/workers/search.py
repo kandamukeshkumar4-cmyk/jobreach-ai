@@ -15,7 +15,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from celery import Task
 from app.workers.celery_app import celery_app, _redis_url_with_ssl
-from app.database import get_db
+from app.database import get_db, new_db
 from app.config import get_settings
 import redis
 import structlog
@@ -27,7 +27,9 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 
 # Max postings dispatched to the (LLM) scoring pipeline per mission. Keeps mission
 # wall-time reasonable (2 Celery workers) now that the source funnel is much larger.
-SCORE_CAP = 30
+# Deep-scoring is the slow phase; cap the prioritized roles so a whole mission
+# finishes under ~2 min. Top-15 by prior filtering still covers the strong matches.
+SCORE_CAP = 15
 
 # Conservative per-job scoring rate (seconds) used to seed the ETA before any real
 # scoring data exists. score_job refines this from the actual rolling rate.
@@ -67,7 +69,7 @@ _REMOTEOK_NON_US_SIGNALS = frozenset([
 
 def _pub(r: redis.Redis, mission_id: str, event_type: str, message: str, detail: str = None, meta: dict = None):
     """Persist event to DB and publish to Redis pub/sub for SSE streaming."""
-    db = get_db()
+    db = new_db()
     row = {
         "mission_id": mission_id,
         "event_type": event_type,
@@ -93,7 +95,7 @@ def run_mission(self: Task, mission_id: str):
     """
     s = get_settings()
     r = redis.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
-    db = get_db()
+    db = new_db()
 
     try:
         # Mark running
@@ -191,6 +193,9 @@ def run_mission(self: Task, mission_id: str):
         total_filtered = len(filtered)
         _pub(r, mission_id, "ok", f"Filtered to {total_filtered} matching roles ({total_scanned - total_filtered} eliminated)",
              meta={"stage": "filter", "filtered": total_filtered, "scanned": total_scanned,
+                   # filtered_out = removed by profile/filter rules; distinct from
+                   # dead_pruned (liveness). `pruned` kept for old-event back-compat.
+                   "filtered_out": total_scanned - total_filtered,
                    "pruned": total_scanned - total_filtered})
 
         # ── BOUND THE CANDIDATE SET BEFORE LIVENESS ──────────────────────────
@@ -213,11 +218,14 @@ def run_mission(self: Task, mission_id: str):
         # attempted jobs when deciding mission completion.
         if dead_count:
             _pub(r, mission_id, "info", f"Pruned {dead_count} dead/closed postings — {verified} verified live",
-                 meta={"stage": "verify", "verified": verified, "pruned": dead_count,
+                 meta={"stage": "verify", "verified": verified,
+                       # dead_pruned = removed by liveness; distinct from filtered_out.
+                       "dead_pruned": dead_count, "pruned": dead_count,
                        "scanned": total_scanned, "filtered": total_filtered})
         else:
             _pub(r, mission_id, "ok", f"All {verified} postings verified live",
-                 meta={"stage": "verify", "verified": verified, "pruned": 0,
+                 meta={"stage": "verify", "verified": verified,
+                       "dead_pruned": 0, "pruned": 0,
                        "scanned": total_scanned, "filtered": total_filtered})
 
         to_score = live_jobs[:SCORE_CAP]
@@ -502,11 +510,20 @@ def _parallel_flatten(fn, items: list, workers: int = 12) -> list:
     out: list = []
     try:
         with ThreadPoolExecutor(max_workers=min(workers, len(items))) as pool:
-            for res in pool.map(fn, items):
+            # submit + as_completed (NOT pool.map, which yields in submission
+            # order): a slow leading board can't block faster boards from joining
+            # the funnel. Per-future try/except so one failing board can't abort
+            # the batch or leak its exception out of the loop.
+            futures = [pool.submit(fn, item) for item in items]
+            for fut in as_completed(futures):
+                try:
+                    res = fut.result()
+                except Exception:
+                    res = None
                 if res:
                     out.extend(res)
     except Exception:
-        # Fallback: sequential is always safe, just slower.
+        # Pool couldn't even start (tight worker memory) → sequential fallback.
         for item in items:
             try:
                 res = fn(item)
@@ -820,20 +837,20 @@ def _verify_liveness(jobs: list):
     """Concurrently liveness-check postings. Returns (live_jobs, dead_count)."""
     if not jobs:
         return [], 0
-    live = []
-    dead = 0
+    # Check concurrently but REBUILD in original candidate order, so the priority
+    # ranking survives liveness and to_score = live[:SCORE_CAP] keeps the top roles
+    # (appending in completion order would shuffle the ranking).
+    ok_by_idx: dict = {}
     with ThreadPoolExecutor(max_workers=12) as pool:
-        futures = {pool.submit(_check_one_live, j): j for j in jobs}
+        futures = {pool.submit(_check_one_live, j): i for i, j in enumerate(jobs)}
         for fut in as_completed(futures):
-            j = futures[fut]
+            i = futures[fut]
             try:
-                ok = fut.result()
+                ok_by_idx[i] = fut.result()
             except Exception:
-                ok = True  # never drop on checker error
-            if ok:
-                live.append(j)
-            else:
-                dead += 1
+                ok_by_idx[i] = True  # never drop on checker error
+    live = [j for i, j in enumerate(jobs) if ok_by_idx.get(i, True)]
+    dead = len(jobs) - len(live)
     return live, dead
 
 
