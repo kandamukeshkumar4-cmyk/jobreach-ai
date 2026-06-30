@@ -15,6 +15,9 @@ supabase>=2.11.0
 
 # LLM (NVIDIA NIM — OpenAI-compatible)
 openai>=1.0.0
+# Imported by stale deployed task modules on Azure; current code uses NVIDIA NIM
+# only. Kept so the Celery worker can import cleanly (forces an Oryx rebuild too).
+anthropic>=0.30.0
 
 # Web scraping / search
 requests==2.32.3
