@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { LayoutDashboard, Rocket, Target, ListChecks, FileText, User, LogOut, Plus } from 'lucide-react'
-import { MetalLink } from '@/components/ui/metal-button'
 import { useAppStore } from './store'
 import type { ReactNode } from 'react'
 import { useState, useEffect } from 'react'
@@ -155,10 +154,13 @@ function Topbar() {
         {getTitle(pathname)}
       </h1>
       <div className="ml-auto">
-        <MetalLink href="/missions/new" size="sm">
-          <Plus className="w-4 h-4" />
+        <Link
+          href="/missions/new"
+          className="inline-flex items-center gap-2 rounded-[var(--radius-pill)] bg-prismatic px-4 py-2.5 text-sm font-semibold tracking-[-0.2px] text-[var(--bg)] shadow-[var(--glow-blue)] transition-[filter,transform] duration-150 hover:brightness-110 active:scale-[0.98]"
+        >
+          <Plus className="h-4 w-4" />
           New Mission
-        </MetalLink>
+        </Link>
       </div>
     </div>
   )
