@@ -83,6 +83,13 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
         if not job:
             return
 
+        # Stream a per-job heartbeat so the (longest) scoring phase never looks
+        # stalled: one "researching" event as each role's deep-dive begins.
+        from app.workers.search import _pub
+        _pub(r, mission_id, "run",
+             f"Researching {job['company']} — {job['title']}…",
+             meta={"kind": "research", "company": job["company"], "role": job["title"]})
+
         # Call research directly — avoids Celery subtask restrictions
         research = run_company_research(job["company"], job.get("url", ""))
 
@@ -139,28 +146,47 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
         }
         db.table("matches").insert(match_row).execute()
 
-        # Only emit SSE event for strong matches
+        # Advance the atomic progress counter first so the streamed event can
+        # carry an honest "n of total" position. Parallel score_job tasks each
+        # bump this, so n is monotonic across the whole scoring phase.
+        n = r.incr(f"mission:{mission_id}:attempted")
+        progress = {
+            "kind": "score", "index": n, "total": _total_filtered(db, mission_id),
+            "company": job["company"], "role": job["title"],
+            "score": scored["overall_score"], "grade": scored["grade"],
+        }
+        # A/B keep the celebratory match event (with why_fit); every other grade
+        # streams a compact "scored" line so the user sees each role land.
         if scored["grade"] in ("A", "B"):
-            from app.workers.search import _pub
             _pub(r, mission_id, "star",
                  f"<strong>{scored['grade']} match</strong>: {job['title']} at {job['company']} — {scored['overall_score']}/5.0",
-                 detail=scored["why_fit"])
+                 detail=scored["why_fit"], meta=progress)
+        else:
+            _pub(r, mission_id, "info",
+                 f"Scored {job['title']} at {job['company']} — {scored['overall_score']}/5.0",
+                 meta=progress)
 
-        # Increment atomic Redis counter then check if mission is complete.
-        # Using a Redis counter (not warn-event count) avoids stale events from
-        # prior runs pre-inflating the tally and triggering early completion.
-        r.incr(f"mission:{mission_id}:attempted")
         _check_mission_complete(db, r, mission_id)
 
     except Exception as exc:
         log.error("score_job_failed", job_id=job_id, error=str(exc))
         try:
             from app.workers.search import _pub
-            _pub(r, mission_id, "warn", f"Scoring skipped for job {job_id}: {exc}")
-            r.incr(f"mission:{mission_id}:attempted")
+            n = r.incr(f"mission:{mission_id}:attempted")
+            _pub(r, mission_id, "warn", f"Scoring skipped for job {job_id}: {exc}",
+                 meta={"kind": "score", "index": n, "total": _total_filtered(db, mission_id)})
             _check_mission_complete(db, r, mission_id)
         except Exception:
             pass
+
+
+def _total_filtered(db, mission_id: str) -> int:
+    """Best-effort read of the dispatched-job count for 'n of total' progress."""
+    try:
+        row = db.table("missions").select("total_filtered").eq("id", mission_id).single().execute().data
+        return int((row or {}).get("total_filtered") or 0)
+    except Exception:
+        return 0
 
 
 def _check_mission_complete(db, r, mission_id: str):

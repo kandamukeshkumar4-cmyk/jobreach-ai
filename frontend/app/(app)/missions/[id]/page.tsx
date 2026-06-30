@@ -141,7 +141,7 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
       )}
 
       {/* Live console */}
-      <MissionFeed events={events} status={streamStatus} missionTitle={title} />
+      <MissionFeed events={events} status={streamStatus} mission={mission} missionTitle={title} />
 
       {/* Meta bar */}
       {isLoading && !mission ? (

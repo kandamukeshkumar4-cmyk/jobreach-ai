@@ -1,21 +1,20 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { StatusBadge } from '@/components/ui/status-badge';
 import type { MissionOut } from '@/lib/types';
 
 export interface MissionMetaProps {
   mission?: MissionOut;
-  /** True while the SSE stream is connecting or running (drives the live clock). */
-  live: boolean;
+  /** Accepted for API compatibility; the live clock now lives in the console. */
+  live?: boolean;
 }
 
 /**
- * Meta bar below the console: source badges, scan/filter/match counters, a live
- * elapsed-time clock, and the mission status badge.
+ * Summary bar below the console: scan/filter/match totals, source badges, and
+ * the mission status badge. The live elapsed clock now lives in the console
+ * hero (the always-ticking anti-"stuck" anchor), so it's not duplicated here.
  */
-export function MissionMeta({ mission, live }: MissionMetaProps) {
-  const elapsed = useElapsed(mission?.started_at, mission?.completed_at, live);
+export function MissionMeta({ mission }: MissionMetaProps) {
   const sources = extractSources(mission);
 
   return (
@@ -24,18 +23,6 @@ export function MissionMeta({ mission, live }: MissionMetaProps) {
         <Stat label="Scanned" value={mission?.total_scanned} />
         <Stat label="Filtered" value={mission?.total_filtered} />
         <Stat label="Matches" value={mission?.total_matches} accent="cyan" />
-
-        <div className="flex flex-col gap-1">
-          <span className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[1.4px] text-[var(--muted)]">
-            Elapsed
-          </span>
-          <span
-            className="text-lg font-semibold tabular-nums tracking-[-0.5px] text-[var(--text)]"
-            style={{ fontFamily: 'var(--font-mono)' }}
-          >
-            {elapsed}
-          </span>
-        </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-3">
           {sources.length > 0 && (
@@ -83,44 +70,6 @@ function Stat({ label, value, accent }: StatProps) {
       </span>
     </div>
   );
-}
-
-/**
- * Computes the elapsed time from started_at, ticking once per second while live
- * and the mission is unfinished. Freezes at the final duration when complete.
- */
-function useElapsed(
-  startedAt: string | undefined,
-  completedAt: string | undefined,
-  live: boolean,
-): string {
-  const [now, setNow] = useState(() => Date.now());
-
-  const startMs = startedAt ? new Date(startedAt).getTime() : NaN;
-  const endMs = completedAt ? new Date(completedAt).getTime() : NaN;
-  const finished = !Number.isNaN(endMs);
-  const ticking = live && !finished && !Number.isNaN(startMs);
-
-  useEffect(() => {
-    if (!ticking) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [ticking]);
-
-  if (Number.isNaN(startMs)) return '00:00';
-
-  const reference = finished ? endMs : now;
-  const totalSec = Math.max(0, Math.floor((reference - startMs) / 1000));
-  return formatDuration(totalSec);
-}
-
-function formatDuration(totalSec: number): string {
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
-  return `${pad(m)}:${pad(s)}`;
 }
 
 /**
