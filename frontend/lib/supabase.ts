@@ -8,7 +8,20 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 export const supabase: SupabaseClient | null =
   supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey)
+    ? createClient(supabaseUrl, supabaseAnonKey, {
+        auth: {
+          // Persist the session in localStorage and keep it fresh so the app
+          // layout authenticates after an OAuth redirect or a page refresh.
+          persistSession: true,
+          autoRefreshToken: true,
+          // Use PKCE so the OAuth return carries a `?code=` we exchange
+          // ourselves in /auth/callback. Turning OFF automatic URL detection
+          // makes that exchange deterministic — no double-exchange race when
+          // the code lands on the landing page (Site URL fallback) first.
+          flowType: 'pkce',
+          detectSessionInUrl: false,
+        },
+      })
     : null;
 
 /**
