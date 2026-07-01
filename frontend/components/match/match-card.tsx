@@ -12,10 +12,15 @@ import {
   Download,
   AlertTriangle,
   Loader2,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { downloadDoc } from '@/lib/download';
 import { formatSalary } from '@/lib/format';
+import { parseTrust, parseRepost, type TrustInfo } from '@/lib/research';
 import type { MatchOut, ResumeTask } from '@/lib/types';
 import { LiquidGlassCard } from '@/components/ui/liquid-glass';
 import { ScoreRing } from '@/components/ui/score-ring';
@@ -35,6 +40,35 @@ type ResumeState = 'idle' | 'working' | 'success' | 'failure';
 interface ResearchChip {
   label: string;
   tone: ChipTone;
+}
+
+const TRUST_META: Record<
+  TrustInfo['level'],
+  { label: string; tone: ChipTone; icon: LucideIcon }
+> = {
+  high: { label: 'Trusted', tone: 'good', icon: ShieldCheck },
+  medium: { label: 'Check listing', tone: 'warn', icon: Shield },
+  low: { label: 'Caution', tone: 'flag', icon: ShieldAlert },
+};
+
+/** Shield-style listing-trust chip; tooltip lists the trust flags. */
+function TrustBadge({ trust }: { trust: TrustInfo }) {
+  const meta = TRUST_META[trust.level];
+  const Icon = meta.icon;
+  return (
+    <span
+      title={
+        trust.flags.length > 0
+          ? trust.flags.join(' · ')
+          : `Trust score ${trust.score}/100`
+      }
+    >
+      <Chip tone={meta.tone}>
+        <Icon className="h-3 w-3 shrink-0" />
+        {meta.label}
+      </Chip>
+    </span>
+  );
 }
 
 /**
@@ -324,6 +358,10 @@ export function MatchCard({ match }: MatchCardProps) {
     .slice(0, MAX_DIMENSIONS);
 
   const researchChips = buildResearchChips(match.company_research);
+  const trust = parseTrust(match.company_research);
+  const repost = parseRepost(match.company_research);
+  const showChipRow =
+    trust !== null || repost?.isRepost === true || researchChips.length > 0;
 
   return (
     <LiquidGlassCard className="flex h-full flex-col p-5">
@@ -379,9 +417,22 @@ export function MatchCard({ match }: MatchCardProps) {
         </p>
       )}
 
-      {/* Company research chips */}
-      {researchChips.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
+      {/* Company research chips (trust + repost first, then freeform research) */}
+      {showChipRow && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {trust && <TrustBadge trust={trust} />}
+          {repost?.isRepost && (
+            <Chip tone="warn">
+              Reposted
+              {repost.lastSeenDays != null && (
+                <>
+                  {' · seen '}
+                  <span className="font-mono">{repost.lastSeenDays}d</span>
+                  {' ago'}
+                </>
+              )}
+            </Chip>
+          )}
           {researchChips.map((chip, i) => (
             <Chip key={`${chip.label}-${i}`} tone={chip.tone}>
               {chip.label}

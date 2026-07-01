@@ -16,6 +16,7 @@ from app.workers.celery_app import celery_app, _redis_url_with_ssl
 from app.database import new_db
 from app.config import get_settings
 from app.workers.research import run_company_research
+from app.services.trust import score_trust, detect_repost
 from openai import OpenAI
 import structlog
 
@@ -165,6 +166,23 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
         finally:
             stop_hb()
 
+        # Stamp trust + repost signals into company_research (no schema change —
+        # both live under existing JSON keys). Copy first so the 24h research
+        # cache never carries per-job stamps. Flag-only: a failure here must
+        # never sink the mission, so each stamp is individually guarded.
+        research = dict(research or {})
+        try:
+            research["trust"] = score_trust(job)
+        except Exception as exc:
+            log.warning("trust_score_failed", job_id=job_id, error=str(exc))
+        try:
+            research["repost"] = detect_repost(
+                db, job, _user_profile_ids(db, profile),
+                exclude_mission_id=mission_id,
+            )
+        except Exception as exc:
+            log.warning("repost_detect_failed", job_id=job_id, error=str(exc))
+
         # Persist match
         match_row = {
             "mission_id": mission_id,
@@ -215,6 +233,22 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
             _check_mission_complete(db, r, mission_id)
         except Exception:
             pass
+
+
+def _user_profile_ids(db, profile: dict) -> list:
+    """All profile ids owned by this user — the repost lookback spans every
+    profile the user has (matches career-ops' per-user scan history). Falls
+    back to the mission's own profile id if the lookup fails."""
+    try:
+        uid = profile.get("user_id")
+        if uid:
+            rows = db.table("profiles").select("id").eq("user_id", uid).execute().data or []
+            ids = [row["id"] for row in rows if row.get("id")]
+            if ids:
+                return ids
+    except Exception:
+        pass
+    return [pid for pid in [profile.get("id")] if pid]
 
 
 def _scoring_total(r: redis.Redis, db, mission_id: str) -> int:
