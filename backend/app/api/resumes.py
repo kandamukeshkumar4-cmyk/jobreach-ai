@@ -1,5 +1,6 @@
 import base64
 import json
+import time
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from app.database import get_db
@@ -15,6 +16,7 @@ router = APIRouter()
 # Redis flush, but Redis is already the task backend so the TTL window matches
 # the task lifetime.
 _RESUME_TASK_TTL = 86400  # 24h
+_RESUME_TASK_DEAD_SECONDS = 35
 
 
 # Shared pooled sync client — a per-request from_url() would TLS-handshake on
@@ -62,7 +64,11 @@ async def generate_resume(
         _redis().setex(
             _resume_task_key(task.id),
             _RESUME_TASK_TTL,
-            json.dumps({"user_id": user_id, "match_id": payload.match_id}),
+            json.dumps({
+                "user_id": user_id,
+                "match_id": payload.match_id,
+                "created_at": time.time(),
+            }),
         )
     except Exception:
         try:
@@ -95,6 +101,16 @@ async def resume_status(task_id: str, user_id: str = Depends(get_current_user_id
         raise HTTPException(404, "Task not found")  # 404, don't confirm existence
 
     result = celery_app.AsyncResult(task_id)
+    try:
+        age = time.time() - float(owner.get("created_at") or time.time())
+    except (TypeError, ValueError):
+        age = 0
+    if not result.ready() and age > _RESUME_TASK_DEAD_SECONDS:
+        return {
+            "task_id": task_id,
+            "status": "FAILURE",
+            "result": {"error": "Resume generation timed out. Please retry."},
+        }
     return {
         "task_id": task_id,
         "status": result.status,

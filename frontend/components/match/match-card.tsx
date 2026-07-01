@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   Building2,
@@ -29,9 +29,9 @@ import { Chip, type ChipTone } from '@/components/ui/chip';
 import { Button } from '@/components/ui/button';
 
 const POLL_INTERVAL_MS = 3000;
-// Hard cap on status polls (~6 min at 3s). Without it, a lost task record
-// (Redis flush, pre-deploy task) spins the "Tailoring…" state forever.
-const MAX_POLLS = 120;
+// Hard cap on status polls (~30s at 3s). Without it, a lost task record
+// (Redis flush, pre-deploy task) spins the "Tailoring..." state too long.
+const MAX_POLLS = 10;
 const MAX_DIMENSIONS = 5;
 
 // Celery task states surfaced by the resume pipeline.
@@ -205,6 +205,7 @@ export function MatchCard({ match }: MatchCardProps) {
   const [resumeError, setResumeError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const autoDownloadedRef = useRef(false);
 
   // --- Tracker state ---
   const [trackState, setTrackState] = useState<'idle' | 'saving' | 'done'>(
@@ -230,7 +231,7 @@ export function MatchCard({ match }: MatchCardProps) {
   const [downloading, setDownloading] = useState(false);
   const pollCountRef = useRef(0);
 
-  const handleDownload = async () => {
+  const handleDownload = useCallback(async () => {
     if (!resumeUrl || downloading) return;
     setDownloading(true);
     setResumeError(null);
@@ -241,7 +242,15 @@ export function MatchCard({ match }: MatchCardProps) {
     } finally {
       setDownloading(false);
     }
-  };
+  }, [downloading, resumeUrl]);
+
+  useEffect(() => {
+    if (resumeState !== 'success' || !resumeUrl || autoDownloadedRef.current) {
+      return;
+    }
+    autoDownloadedRef.current = true;
+    void handleDownload();
+  }, [handleDownload, resumeState, resumeUrl]);
 
   const pollStatus = async (taskId: string) => {
     // Cap the loop: a task whose status can never resolve (lost ownership
@@ -261,11 +270,22 @@ export function MatchCard({ match }: MatchCardProps) {
       const state = normalizeState(task.status);
       if (state === 'success') {
         stopPolling();
-        setResumeUrl(extractPdfUrl(task.result));
+        const url = extractPdfUrl(task.result);
+        if (!url) {
+          setResumeError('Resume generated but no download URL was returned.');
+          setResumeState('failure');
+          return;
+        }
+        setResumeError(null);
+        setResumeUrl(url);
         setResumeState('success');
       } else if (state === 'failure') {
         stopPolling();
-        setResumeError('Generation failed. Try again.');
+        const message =
+          task.result && typeof task.result === 'object' && 'error' in task.result
+            ? String((task.result as Record<string, unknown>).error)
+            : 'Generation failed. Try again.';
+        setResumeError(message);
         setResumeState('failure');
       }
       // else keep polling
@@ -290,6 +310,7 @@ export function MatchCard({ match }: MatchCardProps) {
     setResumeState('working');
     setResumeError(null);
     setResumeUrl(null);
+    autoDownloadedRef.current = false;
     stopPolling();
     pollCountRef.current = 0;
 
@@ -308,7 +329,13 @@ export function MatchCard({ match }: MatchCardProps) {
     // The generate call may already resolve to a terminal state.
     const immediate = normalizeState(task.status);
     if (immediate === 'success') {
-      setResumeUrl(extractPdfUrl(task.result));
+      const url = extractPdfUrl(task.result);
+      if (!url) {
+        setResumeError('Resume generated but no download URL was returned.');
+        setResumeState('failure');
+        return;
+      }
+      setResumeUrl(url);
       setResumeState('success');
       return;
     }
@@ -324,7 +351,7 @@ export function MatchCard({ match }: MatchCardProps) {
       return;
     }
 
-    // Poll every 3s until SUCCESS / FAILURE.
+    // Poll every 3s until SUCCESS / FAILURE, capped at roughly 30s.
     void pollStatus(task.task_id);
     pollRef.current = setInterval(() => {
       void pollStatus(task.task_id);
@@ -456,7 +483,7 @@ export function MatchCard({ match }: MatchCardProps) {
               className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline disabled:opacity-60"
             >
               {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              {downloading ? 'Preparing…' : 'Download resume (.docx)'}
+              {downloading ? 'Downloading...' : 'Download again (.docx)'}
             </button>
           ) : (
             <span className="font-medium">Resume ready</span>
