@@ -15,6 +15,10 @@ import { Spinner } from '@/components/ui/spinner'
 import { EmptyState } from '@/components/ui/empty-state'
 import { cn } from '@/lib/format'
 import { SmoothInput } from '@/components/ui/smooth-input'
+import {
+  activeMissionBanner,
+  missionCreateErrorMessage,
+} from '@/lib/mission-guard'
 
 // --- Source providers -------------------------------------------------------
 
@@ -84,7 +88,7 @@ export default function NewMissionPage() {
     } catch {
       // localStorage unavailable
     }
-  }, [])
+  }, [activeProfileId, setActiveProfile])
 
   const [title, setTitle] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
@@ -114,13 +118,25 @@ export default function NewMissionPage() {
 
   const hasProfile = !!activeProfileId
 
+  const missionsQuery = useQuery({
+    queryKey: ['missions', 'active-guard'],
+    queryFn: () => api.missions.list(),
+    enabled: hasProfile,
+    retry: 1,
+    refetchInterval: 5000,
+  })
+
+  const activeBanner = activeMissionBanner(missionsQuery.data)
+  const hasActiveMission = !!activeBanner
+
   const canSubmit = useMemo(
     () =>
       hasProfile &&
       searchQuery.trim().length > 0 &&
       sources.length > 0 &&
+      !hasActiveMission &&
       !submitting,
-    [hasProfile, searchQuery, sources.length, submitting],
+    [hasActiveMission, hasProfile, searchQuery, sources.length, submitting],
   )
 
   function toggleSource(id: string) {
@@ -160,12 +176,7 @@ export default function NewMissionPage() {
       setActiveMission(result.id)
       router.push(`/missions/${result.id}`)
     } catch (err) {
-      const raw = err instanceof Error ? err.message : ''
-      // Backend returns 409 when a mission is already running (one at a time).
-      const friendly = raw.startsWith('409')
-        ? 'A mission is already running — let it finish before starting another.'
-        : raw || 'Failed to launch mission. Please try again.'
-      setSubmitError(friendly)
+      setSubmitError(missionCreateErrorMessage(err))
       setSubmitting(false)
       inFlightRef.current = false
     }
@@ -187,6 +198,13 @@ export default function NewMissionPage() {
       </header>
 
       {!hasProfile && <NoProfileNotice />}
+      {activeBanner && (
+        <ActiveMissionNotice
+          missionId={activeBanner.mission.id}
+          title={activeBanner.title}
+          message={activeBanner.message}
+        />
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Core fields */}
@@ -205,7 +223,7 @@ export default function NewMissionPage() {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="e.g. Senior backend engineer, Python, remote"
                 className="px-3 py-2.5 text-sm"
-                disabled={!hasProfile || submitting}
+                disabled={!hasProfile || hasActiveMission || submitting}
                 required
                 autoFocus
               />
@@ -224,7 +242,7 @@ export default function NewMissionPage() {
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Optional — defaults to your search query"
                 className="px-3 py-2.5 text-sm"
-                disabled={!hasProfile || submitting}
+                disabled={!hasProfile || hasActiveMission || submitting}
               />
             </div>
           </div>
@@ -254,7 +272,7 @@ export default function NewMissionPage() {
                   role="checkbox"
                   aria-checked={checked}
                   onClick={() => toggleSource(source.id)}
-                  disabled={!hasProfile || submitting}
+                  disabled={!hasProfile || hasActiveMission || submitting}
                   className={cn(
                     'flex items-start gap-2.5 rounded-[8px] border px-3 py-2.5 text-left transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50',
                     checked
@@ -333,7 +351,7 @@ export default function NewMissionPage() {
                   onChange={(e) => setLocationFilter(e.target.value)}
                   placeholder="e.g. Remote, Berlin, United States"
                   className="px-3 py-2.5 text-sm"
-                  disabled={!hasProfile || submitting}
+                  disabled={!hasProfile || hasActiveMission || submitting}
                 />
               </div>
 
@@ -348,14 +366,14 @@ export default function NewMissionPage() {
                     placeholder="e.g. 120000"
                     className="px-3 py-2.5 text-sm flex-1"
                     wrapperClassName="flex-1"
-                    disabled={!hasProfile || submitting}
+                    disabled={!hasProfile || hasActiveMission || submitting}
                   />
                   <select
                     aria-label="Salary currency"
                     value={salaryCurrency}
                     onChange={(e) => setSalaryCurrency(e.target.value)}
                     className={cn(FIELD_CLASS, 'w-24 shrink-0')}
-                    disabled={!hasProfile || submitting}
+                    disabled={!hasProfile || hasActiveMission || submitting}
                   >
                     {CURRENCIES.map((c) => (
                       <option key={c} value={c}>
@@ -398,7 +416,9 @@ export default function NewMissionPage() {
             Cancel
           </Button>
           <MetalButton type="submit" disabled={!canSubmit} size="sm">
-            {submitting ? (
+            {hasActiveMission ? (
+              <>Mission running</>
+            ) : submitting ? (
               <>
                 <Spinner size={16} className="text-[#050506]" />
                 Launching…
@@ -435,6 +455,37 @@ function NoProfileNotice() {
         }
       />
     </Card>
+  )
+}
+
+function ActiveMissionNotice({
+  missionId,
+  title,
+  message,
+}: {
+  missionId: string
+  title: string
+  message: string
+}) {
+  return (
+    <div
+      role="alert"
+      className="mb-5 flex items-start justify-between gap-3 rounded-[8px] border border-[var(--amber)] bg-[color-mix(in_srgb,var(--amber)_8%,transparent)] px-4 py-3"
+    >
+      <div className="flex min-w-0 items-start gap-2.5">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--amber)]" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-[var(--text)]">{title}</p>
+          <p className="mt-0.5 text-xs text-[var(--muted2)]">{message}</p>
+        </div>
+      </div>
+      <Link
+        href={`/missions/${missionId}`}
+        className="shrink-0 rounded-[var(--radius-pill)] border border-[var(--border-bright)] px-3 py-1.5 text-xs font-semibold text-[var(--text)] transition-colors hover:bg-[var(--card)]"
+      >
+        View mission
+      </Link>
+    </div>
   )
 }
 
