@@ -85,6 +85,304 @@ def score_to_grade(score: float) -> str:
     return "F"
 
 
+def _clamp_score(value: float) -> float:
+    return round(max(1.0, min(5.0, float(value))), 1)
+
+
+def _tokenize(text: str) -> set:
+    import re
+    return {t for t in re.findall(r"[a-z0-9+#.]+", (text or "").lower()) if len(t) > 2}
+
+
+def _fallback_score_job(job: dict, profile: dict, reason: str = "budget") -> dict:
+    """Fast local scoring contract used when the mission deadline is tight.
+
+    It still grades real postings against the user's profile; it does not invent
+    jobs or mark an unscored role as deeply researched. The why_gap explains why
+    the fallback path was used so the UI is honest.
+    """
+    title = job.get("title") or ""
+    company = job.get("company") or "Unknown company"
+    blob = " ".join([
+        title,
+        job.get("description_snippet") or "",
+        job.get("location") or "",
+    ])
+    blob_l = blob.lower()
+
+    target_roles = profile.get("target_roles") or []
+    target_tokens = set()
+    for role in target_roles:
+        target_tokens |= _tokenize(role)
+    title_tokens = _tokenize(title)
+    role_overlap = len(target_tokens & title_tokens)
+    role_score = _clamp_score(3.0 + min(1.6, role_overlap * 0.45))
+
+    skills = [s for s in (profile.get("skills") or []) if isinstance(s, str)]
+    skill_hits = [s for s in skills if s.lower() in blob_l]
+    skill_ratio = len(skill_hits) / max(1, min(len(skills), 8))
+    cv_score = _clamp_score(3.1 + min(1.7, skill_ratio * 1.8) + (0.2 if role_overlap else 0))
+
+    location = (job.get("location") or "").lower()
+    culture_score = 4.2 if "remote" in location else 3.7
+
+    salary_min = job.get("salary_min")
+    salary_max = job.get("salary_max")
+    if salary_min or salary_max:
+        comp_score = 4.1
+    else:
+        comp_score = 3.6
+
+    desc_len = len(job.get("description_snippet") or "")
+    legitimacy_score = 4.2 if job.get("url") and desc_len >= 80 else 3.4
+
+    dim_values = {
+        "cv_match": (cv_score, f"{len(skill_hits)} profile skills matched the posting text."),
+        "archetype_fit": (role_score, "Role title overlaps the user's target role keywords." if role_overlap else "Limited target-role keyword overlap."),
+        "level_fit": (_clamp_score(4.2 if any(w in title.lower() for w in ("senior", "staff", "lead", "principal")) else 3.8),
+                      "Seniority inferred from the role title."),
+        "compensation": (comp_score, "Salary signal present." if salary_min or salary_max else "No salary disclosed in the posting."),
+        "culture": (culture_score, "Remote-friendly posting." if "remote" in location else "Location fit inferred from posting metadata."),
+        "legitimacy": (legitimacy_score, "Direct URL and substantive description present." if legitimacy_score >= 4 else "Thin posting metadata."),
+    }
+    dimensions = []
+    weighted = 0.0
+    for key, label, weight in DIMENSIONS:
+        score, evidence = dim_values[key]
+        score = _clamp_score(score)
+        weighted += score * weight
+        dimensions.append({
+            "key": key,
+            "label": label,
+            "score": score,
+            "grade": score_to_grade(score),
+            "evidence": evidence,
+        })
+    overall = _clamp_score(weighted)
+    grade = score_to_grade(overall)
+    hit_text = ", ".join(skill_hits[:5]) if skill_hits else "the available posting text"
+    return {
+        "dimensions": dimensions,
+        "overall_score": overall,
+        "grade": grade,
+        "why_fit": f"{title} at {company} matched {hit_text} and was ranked from real posting metadata.",
+        "why_gap": f"Fast deadline-safe score used because {reason}; review the posting before applying.",
+    }
+
+
+def _strip_json_fence(raw: str) -> str:
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1] if len(parts) > 1 else raw
+        if raw.lstrip().startswith("json"):
+            raw = raw.lstrip()[4:]
+    return raw.strip()
+
+
+def _batch_prompt(profile: dict, jobs: list) -> str:
+    compact_profile = {
+        "skills": profile.get("skills", [])[:30],
+        "years_experience": profile.get("years_experience"),
+        "target_roles": profile.get("target_roles", [])[:10],
+        "archetypes": profile.get("archetypes", [])[:8],
+    }
+    compact_jobs = []
+    for job in jobs:
+        compact_jobs.append({
+            "job_id": job.get("id"),
+            "title": job.get("title"),
+            "company": job.get("company"),
+            "location": job.get("location"),
+            "salary_min": job.get("salary_min"),
+            "salary_max": job.get("salary_max"),
+            "description": (job.get("description_snippet") or "")[:900],
+        })
+    keys = [key for key, _, _ in DIMENSIONS]
+    return f"""Score these real job postings against the candidate profile.
+
+Return ONLY valid JSON with this shape:
+{{"scores":[{{"job_id":"...","dimensions":[{{"key":"cv_match","label":"CV & Skills Match","score":4.2,"grade":"B","evidence":"short"}}],"overall_score":4.2,"grade":"B","why_fit":"short","why_gap":"short or null"}}]}}
+
+Use exactly these dimension keys in this order: {keys}
+Profile:
+{json.dumps(compact_profile, ensure_ascii=True)}
+
+Jobs:
+{json.dumps(compact_jobs, ensure_ascii=True)}
+"""
+
+
+def _normalize_scored_job(raw: dict, job: dict, profile: dict) -> dict:
+    fallback = _fallback_score_job(job, profile, reason="LLM returned incomplete JSON")
+    if not isinstance(raw, dict):
+        return fallback
+    dims_by_key = {d.get("key"): d for d in raw.get("dimensions", []) if isinstance(d, dict)}
+    dimensions = []
+    weighted = 0.0
+    for key, label, weight in DIMENSIONS:
+        d = dims_by_key.get(key) or {}
+        score = _clamp_score(d.get("score", fallback["dimensions"][len(dimensions)]["score"]))
+        weighted += score * weight
+        dimensions.append({
+            "key": key,
+            "label": label,
+            "score": score,
+            "grade": d.get("grade") or score_to_grade(score),
+            "evidence": (d.get("evidence") or fallback["dimensions"][len(dimensions)]["evidence"])[:240],
+        })
+    overall = _clamp_score(raw.get("overall_score", weighted))
+    return {
+        "dimensions": dimensions,
+        "overall_score": overall,
+        "grade": raw.get("grade") or score_to_grade(overall),
+        "why_fit": (raw.get("why_fit") or fallback["why_fit"])[:1000],
+        "why_gap": raw.get("why_gap") if raw.get("why_gap") else fallback["why_gap"],
+    }
+
+
+def _llm_timeout_for_deadline(deadline_ms: int | None) -> float:
+    if not deadline_ms:
+        return 18.0
+    remaining = (deadline_ms - int(time.time() * 1000)) / 1000
+    if remaining <= 8:
+        return 0.0
+    return max(6.0, min(18.0, remaining - 10.0))
+
+
+def _score_jobs_with_batch_llm(jobs: list, profile: dict, timeout_seconds: float) -> dict:
+    if not jobs or timeout_seconds < 6:
+        return {}
+    s = get_settings()
+    client = OpenAI(
+        api_key=s.nvidia_api_key,
+        base_url="https://integrate.api.nvidia.com/v1",
+        timeout=timeout_seconds,
+    )
+    message = client.chat.completions.create(
+        model="meta/llama-3.3-70b-instruct",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": _batch_prompt(profile, jobs)}],
+    )
+    data = json.loads(_strip_json_fence(message.choices[0].message.content))
+    rows = data.get("scores", []) if isinstance(data, dict) else []
+    by_id = {}
+    jobs_by_id = {j.get("id"): j for j in jobs}
+    for row in rows:
+        jid = row.get("job_id") if isinstance(row, dict) else None
+        if jid in jobs_by_id:
+            by_id[jid] = _normalize_scored_job(row, jobs_by_id[jid], profile)
+    return by_id
+
+
+def _load_jobs_in_order(db, job_ids: list) -> list:
+    if not job_ids:
+        return []
+    rows = db.table("jobs").select("*").in_("id", job_ids).execute().data or []
+    by_id = {row.get("id"): row for row in rows}
+    return [by_id[jid] for jid in job_ids if jid in by_id]
+
+
+def _research_stamps(db, job: dict, profile: dict, mission_id: str) -> dict:
+    research = {
+        "summary": "",
+        "funding_stage": None,
+        "growth_signal": "unknown",
+        "remote_policy": "unknown",
+        "layoffs_24mo": False,
+        "glassdoor_sentiment": "unknown",
+        "tech_stack": [],
+        "recent_news": None,
+        "red_flags": [],
+        "positive_signals": [],
+        "scoring_mode": "mission_budget_v1",
+    }
+    try:
+        research["trust"] = score_trust(job)
+    except Exception as exc:
+        log.warning("trust_score_failed", job_id=job.get("id"), error=str(exc))
+    try:
+        research["repost"] = detect_repost(
+            db, job, _user_profile_ids(db, profile), exclude_mission_id=mission_id,
+        )
+    except Exception as exc:
+        log.warning("repost_detect_failed", job_id=job.get("id"), error=str(exc))
+    return research
+
+
+def score_jobs_for_mission(db, r, mission_id: str, job_ids: list, profile: dict,
+                           deadline_ms: int | None = None, llm_limit: int = 0):
+    """Score all queued jobs inside the mission budget.
+
+    The first `llm_limit` jobs get one batched LLM request. Every remaining job
+    gets a deterministic fallback score so the mission completes with real match
+    rows instead of waiting on unbounded per-job calls.
+    """
+    from app.workers.search import _pub
+
+    jobs = _load_jobs_in_order(db, job_ids)
+    total = len(jobs)
+    if not total:
+        _check_mission_complete(db, r, mission_id)
+        return
+
+    llm_jobs = jobs[:max(0, min(llm_limit, total))]
+    scored_by_id = {}
+    if llm_jobs:
+        try:
+            _pub(r, mission_id, "run",
+                 f"Batch-scoring {len(llm_jobs)} priority roles with the LLM...",
+                 meta={"kind": "batch_score", "stage": "score", "total": total,
+                       "llm_slots": len(llm_jobs)})
+            scored_by_id = _score_jobs_with_batch_llm(
+                llm_jobs, profile, _llm_timeout_for_deadline(deadline_ms),
+            )
+        except Exception as exc:
+            log.warning("batch_score_failed", mission_id=mission_id, error=str(exc))
+            _pub(r, mission_id, "info",
+                 "Deep scoring timed out; using fast deadline-safe scoring for this mission.",
+                 meta={"kind": "batch_score", "stage": "score", "error": str(exc)})
+
+    for job in jobs:
+        jid = job.get("id")
+        scored = scored_by_id.get(jid) or _fallback_score_job(
+            job, profile,
+            reason="deadline budget" if jid not in scored_by_id else "LLM response missing this job",
+        )
+        try:
+            db.table("matches").insert({
+                "mission_id": mission_id,
+                "job_id": jid,
+                "overall_score": scored["overall_score"],
+                "grade": scored["grade"],
+                "dimensions": scored["dimensions"],
+                "why_fit": scored["why_fit"],
+                "why_gap": scored.get("why_gap"),
+                "company_research": _research_stamps(db, job, profile, mission_id),
+            }).execute()
+        except Exception as exc:
+            log.warning("match_insert_failed", mission_id=mission_id, job_id=jid, error=str(exc))
+
+        n = r.incr(f"mission:{mission_id}:attempted")
+        eta = _scoring_eta(r, mission_id, n, total)
+        progress = {
+            "kind": "score", "stage": "score", "index": n, "total": total,
+            "company": job.get("company"), "role": job.get("title"),
+            "url": job.get("url", ""), "score": scored["overall_score"],
+            "grade": scored["grade"], "scored": n, "eta_seconds": eta,
+        }
+        if scored["grade"] in ("A", "B"):
+            _pub(r, mission_id, "star",
+                 f"<strong>{scored['grade']} match</strong>: {job.get('title')} at {job.get('company')} — {scored['overall_score']}/5.0",
+                 detail=scored["why_fit"], meta=progress)
+        else:
+            _pub(r, mission_id, "info",
+                 f"Scored {job.get('title')} at {job.get('company')} — {scored['overall_score']}/5.0",
+                 meta=progress)
+
+    _check_mission_complete(db, r, mission_id)
+
+
 @celery_app.task(bind=True, queue="score", name="app.workers.score.score_job")
 def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
     s = get_settings()
