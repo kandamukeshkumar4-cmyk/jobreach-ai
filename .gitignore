@@ -61,3 +61,7 @@ htmlcov/
 /awwwards-portfolio/
 /svelte-design/
 /output/
+
+# Local Claude work logs / scheduler state — never part of product PRs.
+/.claude/JOBREACH_MISSION_PROGRESS_LOOP.md
+/.claude/scheduled_tasks.lock
