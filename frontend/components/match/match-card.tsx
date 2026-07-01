@@ -24,6 +24,9 @@ import { Chip, type ChipTone } from '@/components/ui/chip';
 import { Button } from '@/components/ui/button';
 
 const POLL_INTERVAL_MS = 3000;
+// Hard cap on status polls (~6 min at 3s). Without it, a lost task record
+// (Redis flush, pre-deploy task) spins the "Tailoring…" state forever.
+const MAX_POLLS = 120;
 const MAX_DIMENSIONS = 5;
 
 // Celery task states surfaced by the resume pipeline.
@@ -191,10 +194,12 @@ export function MatchCard({ match }: MatchCardProps) {
   };
 
   const [downloading, setDownloading] = useState(false);
+  const pollCountRef = useRef(0);
 
   const handleDownload = async () => {
     if (!resumeUrl || downloading) return;
     setDownloading(true);
+    setResumeError(null);
     try {
       await downloadDoc(resumeUrl, 'Resume.docx');
     } catch (err) {
@@ -205,6 +210,17 @@ export function MatchCard({ match }: MatchCardProps) {
   };
 
   const pollStatus = async (taskId: string) => {
+    // Cap the loop: a task whose status can never resolve (lost ownership
+    // record, evicted result) must not spin forever.
+    pollCountRef.current += 1;
+    if (pollCountRef.current > MAX_POLLS) {
+      stopPolling();
+      if (mountedRef.current) {
+        setResumeError('Timed out waiting for the resume — try again.');
+        setResumeState('failure');
+      }
+      return;
+    }
     try {
       const task = await api.resumes.status(taskId);
       if (!mountedRef.current) return;
@@ -219,8 +235,18 @@ export function MatchCard({ match }: MatchCardProps) {
         setResumeState('failure');
       }
       // else keep polling
-    } catch {
-      // Transient errors (e.g. cold start) shouldn't kill the poll loop;
+    } catch (err) {
+      // 404 = the task's ownership record is gone (server restart / expired
+      // record) — it will NEVER resolve, so stop instead of spinning forever.
+      if (err instanceof Error && err.message.startsWith('404')) {
+        stopPolling();
+        if (mountedRef.current) {
+          setResumeError('Lost track of this generation — please regenerate.');
+          setResumeState('failure');
+        }
+        return;
+      }
+      // Other transient errors (e.g. cold start) shouldn't kill the poll loop;
       // we keep trying on the next tick.
     }
   };
@@ -231,6 +257,7 @@ export function MatchCard({ match }: MatchCardProps) {
     setResumeError(null);
     setResumeUrl(null);
     stopPolling();
+    pollCountRef.current = 0;
 
     let task: ResumeTask;
     try {
@@ -383,6 +410,15 @@ export function MatchCard({ match }: MatchCardProps) {
           ) : (
             <span className="font-medium">Resume ready</span>
           )}
+        </div>
+      )}
+
+      {/* Rendered in ANY state (a failed DOWNLOAD sets this while state is
+          still 'success' — it must not be silently swallowed). */}
+      {resumeError && resumeState !== 'failure' && (
+        <div className="mt-4 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--red)_30%,transparent)] bg-[color-mix(in_srgb,var(--red)_10%,transparent)] px-3 py-2 text-xs text-[var(--red)]">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>{resumeError}</span>
         </div>
       )}
 

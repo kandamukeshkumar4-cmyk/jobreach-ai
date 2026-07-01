@@ -9,9 +9,10 @@ import redis.asyncio as aioredis
 from app.config import get_settings
 from app.database import get_db
 from app.models.schemas import MissionCreate, MissionOut, MissionEventOut
-from app.workers.celery_app import _redis_url_with_ssl
+from app.workers.celery_app import _redis_url_with_ssl, get_sync_redis
 from app.security import (
     get_current_user_id, require_owned_mission, owned_profile_ids, mission_lock_key,
+    release_mission_lock,
 )
 
 router = APIRouter()
@@ -33,10 +34,9 @@ def _redis_client():
     return aioredis.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
 
 
-def _sync_redis():
-    import redis as _r
-    s = get_settings()
-    return _r.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
+# Sync Redis comes from the shared pooled client in celery_app.get_sync_redis —
+# a per-request from_url() would TLS-handshake on every call.
+_sync_redis = get_sync_redis
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -205,8 +205,20 @@ async def create_mission(
 
     rds.set(lock_key, mission["id"], ex=600)  # tag the lock with the mission id
 
-    # Dispatch the orchestrator task
-    run_mission.delay(mission["id"])
+    # Dispatch the orchestrator task. If the broker is unreachable, do NOT
+    # strand the 'pending' row + tagged lock (they'd 409-block new missions for
+    # minutes with no worker alive to release them) — fail the row, release the
+    # lock (compare-and-delete, so we can't clobber a newer mission's lock), and
+    # surface a retryable error instead of a 500.
+    try:
+        run_mission.delay(mission["id"])
+    except Exception:
+        try:
+            db.table("missions").update({"status": "failed"}).eq("id", mission["id"]).execute()
+        except Exception:
+            pass
+        release_mission_lock(rds, user_id, mission["id"])
+        raise HTTPException(503, "Could not start the mission — please retry.")
 
     return mission
 

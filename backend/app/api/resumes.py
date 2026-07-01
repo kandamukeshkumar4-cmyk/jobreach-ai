@@ -2,11 +2,10 @@ import base64
 import json
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from app.config import get_settings
 from app.database import get_db
 from app.models.schemas import ResumeGenRequest
 from app.security import get_current_user_id, require_owned_match
-from app.workers.celery_app import _redis_url_with_ssl
+from app.workers.celery_app import get_sync_redis
 
 router = APIRouter()
 
@@ -18,10 +17,9 @@ router = APIRouter()
 _RESUME_TASK_TTL = 86400  # 24h
 
 
-def _redis():
-    import redis as _r
-    s = get_settings()
-    return _r.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
+# Shared pooled sync client — a per-request from_url() would TLS-handshake on
+# every /status poll and leak pool connections.
+_redis = get_sync_redis
 
 
 def _resume_task_key(task_id: str) -> str:
@@ -145,18 +143,10 @@ async def download_resume(
     user_id: str = Depends(get_current_user_id),
 ):
     """Return the DOCX file as a binary download."""
-    _require_owned_resume(db, resume_id, user_id)  # 401 if unauth, 404 if not owned
-    result = (
-        db.table("resumes")
-        .select("pdf_url, tailored_markdown")
-        .eq("id", resume_id)
-        .limit(1)
-        .execute()
-    )
-    if not result.data:
-        raise HTTPException(404, "Resume not found")
+    # _require_owned_resume already fetched the full row — no second query.
+    row = _require_owned_resume(db, resume_id, user_id)  # 401 if unauth, 404 if not owned
 
-    pdf_url = result.data[0].get("pdf_url", "")
+    pdf_url = row.get("pdf_url", "")
     if not pdf_url:
         raise HTTPException(404, "Resume file not generated yet")
 
@@ -182,18 +172,10 @@ async def download_cover_letter(
     user_id: str = Depends(get_current_user_id),
 ):
     """Return the tailored cover letter DOCX as a binary download."""
-    _require_owned_resume(db, resume_id, user_id)  # 401 if unauth, 404 if not owned
-    result = (
-        db.table("resumes")
-        .select("cover_letter_pdf_url")
-        .eq("id", resume_id)
-        .limit(1)
-        .execute()
-    )
-    if not result.data:
-        raise HTTPException(404, "Resume not found")
+    # _require_owned_resume already fetched the full row — no second query.
+    row = _require_owned_resume(db, resume_id, user_id)  # 401 if unauth, 404 if not owned
 
-    cl_url = result.data[0].get("cover_letter_pdf_url", "")
+    cl_url = row.get("cover_letter_pdf_url", "")
     if not cl_url:
         raise HTTPException(404, "No cover letter generated for this resume")
 

@@ -115,7 +115,14 @@ def require_owned_match(db, match_id: str, user_id: str) -> dict:
 
 
 def require_owned_profile(db, profile_id: str, user_id: str) -> dict:
-    """Return the profile iff owned by the user, else 404."""
+    """Return the profile iff owned by the user, else 404.
+
+    DELIBERATELY no legacy fallback for NULL-user_id profiles (unlike missions,
+    which fall back to their profile's owner): the only inferable link would be
+    the row's email, and email is user-supplied at profile creation — matching
+    on it would let anyone claim a legacy profile by registering its email.
+    Legacy profiles must be stamped via scripts/backfill_user_id.py (manual
+    resolution) before their owner can see them again."""
     try:
         p = db.table("profiles").select("*").eq("id", profile_id).single().execute().data
     except Exception:

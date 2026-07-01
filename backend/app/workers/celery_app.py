@@ -16,6 +16,21 @@ def _redis_url_with_ssl(url: str) -> str:
 
 _redis_url = _redis_url_with_ssl(s.redis_url)
 
+_sync_redis_client = None
+
+
+def get_sync_redis():
+    """Shared synchronous Redis client (thread-safe, connection-pooled).
+
+    Single construction point for every sync consumer (API routers, workers) —
+    per-request `from_url()` calls each open a fresh TCP+TLS handshake against
+    managed Redis and leak pool connections."""
+    global _sync_redis_client
+    if _sync_redis_client is None:
+        import redis
+        _sync_redis_client = redis.from_url(_redis_url, decode_responses=True)
+    return _sync_redis_client
+
 celery_app = Celery(
     "jobreach",
     broker=_redis_url,
