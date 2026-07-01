@@ -17,6 +17,8 @@ from app.security import (
 
 router = APIRouter()
 
+MISSION_ACTIVE_MESSAGE = "One mission is already running. You cannot start another until it finishes."
+
 # Self-heal thresholds. Completion normally fires from the Redis `attempted`
 # counter in score._check_mission_complete, but a hard-killed worker (OOM /
 # SIGKILL) never increments it, stranding the mission on 'running' forever.
@@ -179,10 +181,7 @@ async def create_mission(
         # Legacy fallback: a running mission from before locks existed (its
         # profile is owned by this user) still blocks. The atomic guard below
         # handles all NEW missions race-free.
-        raise HTTPException(
-            409,
-            "A mission is already running — let it finish before starting another.",
-        )
+        raise HTTPException(409, MISSION_ACTIVE_MESSAGE)
 
     # ATOMIC per-user concurrency guard: SETNX wins the race between two
     # simultaneous creates, so exactly ONE proceeds (the read-check above can't —
@@ -192,10 +191,7 @@ async def create_mission(
     rds = _sync_redis()
     lock_key = mission_lock_key(user_id)
     if not rds.set(lock_key, "pending", nx=True, ex=600):
-        raise HTTPException(
-            409,
-            "A mission is already running — let it finish before starting another.",
-        )
+        raise HTTPException(409, MISSION_ACTIVE_MESSAGE)
 
     row = {
         "user_id": user_id,
