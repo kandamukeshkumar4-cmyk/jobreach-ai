@@ -9,7 +9,11 @@ import redis.asyncio as aioredis
 from app.config import get_settings
 from app.database import get_db
 from app.models.schemas import MissionCreate, MissionOut, MissionEventOut
-from app.workers.celery_app import _redis_url_with_ssl
+from app.workers.celery_app import _redis_url_with_ssl, get_sync_redis
+from app.security import (
+    get_current_user_id, require_owned_mission, owned_profile_ids, mission_lock_key,
+    release_mission_lock,
+)
 
 router = APIRouter()
 
@@ -28,6 +32,11 @@ MISSION_STALL_QUIET_SECONDS = 1800  # 30 min with no event AND no new match = de
 def _redis_client():
     s = get_settings()
     return aioredis.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
+
+
+# Sync Redis comes from the shared pooled client in celery_app.get_sync_redis —
+# a per-request from_url() would TLS-handshake on every call.
+_sync_redis = get_sync_redis
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -119,11 +128,64 @@ def _reconcile_if_stalled(db, mission: dict) -> dict:
 
 
 @router.post("/", response_model=MissionOut, status_code=201)
-async def create_mission(payload: MissionCreate, db=Depends(get_db)):
+async def create_mission(
+    payload: MissionCreate,
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
     """Create and immediately queue a new agent mission."""
     from app.workers.search import run_mission
+    from datetime import datetime, timezone, timedelta
+
+    # Ownership: the client-supplied profile_id MUST belong to the caller — else
+    # a user could launch missions against another user's profile.
+    if payload.profile_id not in owned_profile_ids(db, user_id):
+        raise HTTPException(403, "That profile does not belong to you")
+
+    # One mission at a time (per profile): refuse to start a new one while the
+    # previous is still in flight. A mission older than 5 min still marked
+    # running/pending is treated as stale (dead worker) and does NOT block —
+    # otherwise a crash would lock the user out permanently. Missions now target
+    # <2 min, so 5 min is a safe staleness cutoff.
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    pids = owned_profile_ids(db, user_id)
+    q = (
+        db.table("missions")
+        .select("id")
+        .in_("status", ["pending", "running"])
+        .gte("created_at", cutoff)
+    )
+    # Match by user_id OR by an owned profile_id, so a LEGACY running mission
+    # (created before user_id was stamped, NULL user_id) still blocks a new one.
+    if pids:
+        q = q.or_(f"user_id.eq.{user_id},profile_id.in.({','.join(pids)})")
+    else:
+        q = q.eq("user_id", user_id)
+    active = q.execute().data or []
+    if active:
+        # Legacy fallback: a running mission from before locks existed (its
+        # profile is owned by this user) still blocks. The atomic guard below
+        # handles all NEW missions race-free.
+        raise HTTPException(
+            409,
+            "A mission is already running — let it finish before starting another.",
+        )
+
+    # ATOMIC per-user concurrency guard: SETNX wins the race between two
+    # simultaneous creates, so exactly ONE proceeds (the read-check above can't —
+    # two requests can both read "no active mission" before either inserts).
+    # Released on completion/failure by the score worker; 600s TTL is the crash
+    # safety net (missions target <2 min).
+    rds = _sync_redis()
+    lock_key = mission_lock_key(user_id)
+    if not rds.set(lock_key, "pending", nx=True, ex=600):
+        raise HTTPException(
+            409,
+            "A mission is already running — let it finish before starting another.",
+        )
 
     row = {
+        "user_id": user_id,
         "profile_id": payload.profile_id,
         "title": payload.title,
         "search_query": payload.search_query,
@@ -134,34 +196,67 @@ async def create_mission(payload: MissionCreate, db=Depends(get_db)):
         "status": "pending",
     }
 
-    result = db.table("missions").insert(row).execute()
-    mission = result.data[0]
+    try:
+        result = db.table("missions").insert(row).execute()
+        mission = result.data[0]
+    except Exception:
+        rds.delete(lock_key)  # never strand the lock on a failed insert
+        raise
 
-    # Dispatch the orchestrator task
-    run_mission.delay(mission["id"])
+    rds.set(lock_key, mission["id"], ex=600)  # tag the lock with the mission id
+
+    # Dispatch the orchestrator task. If the broker is unreachable, do NOT
+    # strand the 'pending' row + tagged lock (they'd 409-block new missions for
+    # minutes with no worker alive to release them) — fail the row, release the
+    # lock (compare-and-delete, so we can't clobber a newer mission's lock), and
+    # surface a retryable error instead of a 500.
+    try:
+        run_mission.delay(mission["id"])
+    except Exception:
+        try:
+            db.table("missions").update({"status": "failed"}).eq("id", mission["id"]).execute()
+        except Exception:
+            pass
+        release_mission_lock(rds, user_id, mission["id"])
+        raise HTTPException(503, "Could not start the mission — please retry.")
 
     return mission
 
 
 @router.get("/", response_model=List[MissionOut])
-async def list_missions(db=Depends(get_db)):
-    # No self-heal here: the list view doesn't wait on a single mission, and
-    # reconciling every row would fire 2-3 child-table queries per running
-    # mission on every poll. Self-heal lives on the single-mission GET only.
-    result = db.table("missions").select("*").order("created_at", desc=True).limit(50).execute()
+async def list_missions(
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    # Only the caller's own missions. Match by user_id OR by an owned profile_id
+    # so older rows (created before user_id was stamped) still surface.
+    pids = owned_profile_ids(db, user_id)
+    q = db.table("missions").select("*").order("created_at", desc=True).limit(50)
+    if pids:
+        q = q.or_(f"user_id.eq.{user_id},profile_id.in.({','.join(pids)})")
+    else:
+        q = q.eq("user_id", user_id)
+    result = q.execute()
     return result.data or []
 
 
 @router.get("/{mission_id}", response_model=MissionOut)
-async def get_mission(mission_id: str, db=Depends(get_db)):
-    result = db.table("missions").select("*").eq("id", mission_id).single().execute()
-    if not result.data:
-        raise HTTPException(404, "Mission not found")
-    return _reconcile_if_stalled(db, result.data)
+async def get_mission(
+    mission_id: str,
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    mission = require_owned_mission(db, mission_id, user_id)
+    return _reconcile_if_stalled(db, mission)
 
 
 @router.get("/{mission_id}/events", response_model=List[MissionEventOut])
-async def get_mission_events(mission_id: str, db=Depends(get_db)):
+async def get_mission_events(
+    mission_id: str,
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    require_owned_mission(db, mission_id, user_id)  # 404 if not owned
     result = (
         db.table("mission_events")
         .select("*")
@@ -173,11 +268,17 @@ async def get_mission_events(mission_id: str, db=Depends(get_db)):
 
 
 @router.get("/{mission_id}/stream")
-async def stream_mission_events(mission_id: str, request: Request):
+async def stream_mission_events(
+    mission_id: str,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
     """
     SSE endpoint — frontend connects here to receive live agent telemetry.
     Publishes events from Redis pub/sub channel mission:{mission_id}.
     """
+    require_owned_mission(get_db(), mission_id, user_id)  # 401 if unauth, 404 if not owned
+
     async def event_generator() -> AsyncGenerator[str, None]:
         r = _redis_client()
         pubsub = r.pubsub()

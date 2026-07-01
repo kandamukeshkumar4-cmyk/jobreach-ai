@@ -28,6 +28,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { KanbanColumn } from '@/components/tracker/kanban-column';
 import { AppDrawer } from '@/components/tracker/app-drawer';
+import { FollowupStrip } from '@/components/tracker/followup-strip';
 import {
   ARCHIVED_STATUSES,
   PIPELINE_STATUSES,
@@ -196,6 +197,13 @@ export default function TrackerPage() {
           )}
         </div>
       </div>
+
+      {!isLoading && !isError && applications.length > 0 && (
+        <FollowupStrip
+          applications={applications}
+          onOpen={(a) => setOpenId(a.id)}
+        />
+      )}
 
       {isLoading ? (
         <KanbanSkeleton />

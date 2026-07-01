@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export type ChipTone = 'good' | 'flag' | 'neutral';
+export type ChipTone = 'good' | 'warn' | 'flag' | 'neutral';
 
 export interface ChipProps {
   children: ReactNode;
@@ -9,6 +9,7 @@ export interface ChipProps {
 
 const TONE_COLOR: Record<ChipTone, string> = {
   good: 'var(--green)',
+  warn: 'var(--amber)',
   flag: 'var(--red)',
   neutral: 'var(--muted2)',
 };

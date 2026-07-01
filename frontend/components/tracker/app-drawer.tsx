@@ -6,6 +6,7 @@ import {
   Building2,
   ExternalLink,
   FileText,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
@@ -14,6 +15,7 @@ import type {
   ApplicationStatus,
   ApplicationUpdate,
 } from '@/lib/types';
+import { downloadDoc } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { ScoreRing } from '@/components/ui/score-ring';
 import { Spinner } from '@/components/ui/spinner';
@@ -27,6 +29,14 @@ export interface AppDrawerProps {
   onDelete: (id: string) => Promise<void>;
 }
 
+/** Formats a Date as the local yyyy-mm-dd value an <input type=date> wants. */
+function toDateValue(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 /** Normalizes an ISO/date string into the yyyy-mm-dd value an <input type=date> wants. */
 function toDateInputValue(value?: string): string {
   if (!value) return '';
@@ -34,10 +44,7 @@ function toDateInputValue(value?: string): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return '';
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+  return toDateValue(d);
 }
 
 /**
@@ -88,6 +95,26 @@ export function AppDrawer({
     notes !== (application.notes ?? '') ||
     nextAction !== (application.next_action ?? '') ||
     nextActionDate !== toDateInputValue(application.next_action_date);
+
+  // Career-ops cadence: suggest a follow-up 7 days after applying, or 7 days
+  // from today when that date has already passed (or applied_at is missing).
+  const handleSuggest = () => {
+    const applied = application.applied_at
+      ? new Date(application.applied_at)
+      : null;
+    const base =
+      applied && !Number.isNaN(applied.getTime()) ? applied : new Date();
+    const target = new Date(base);
+    target.setDate(target.getDate() + 7);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (target.getTime() < today.getTime()) {
+      target.setTime(today.getTime());
+      target.setDate(target.getDate() + 7);
+    }
+    setNextActionDate(toDateValue(target));
+    if (!nextAction.trim()) setNextAction('Follow up with recruiter');
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -211,15 +238,26 @@ export function AppDrawer({
           </Field>
 
           {/* Next action date */}
-          <Field label="Next action date">
-            <input
-              type="date"
-              value={nextActionDate}
+          <div>
+            <Field label="Next action date">
+              <input
+                type="date"
+                value={nextActionDate}
+                disabled={busy}
+                onChange={(e) => setNextActionDate(e.target.value)}
+                className="w-full px-3 py-2 text-sm [color-scheme:dark] disabled:opacity-50 huly-input"
+              />
+            </Field>
+            <button
+              type="button"
               disabled={busy}
-              onChange={(e) => setNextActionDate(e.target.value)}
-              className="w-full px-3 py-2 text-sm [color-scheme:dark] disabled:opacity-50 huly-input"
-            />
-          </Field>
+              onClick={handleSuggest}
+              className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-[var(--muted2)] transition-colors hover:text-[var(--cyan)] focus-visible:outline-none focus-visible:text-[var(--cyan)] disabled:opacity-50"
+            >
+              <Sparkles className="h-3 w-3" />
+              Suggest
+            </button>
+          </div>
 
           {/* Notes */}
           <Field label="Notes">
@@ -315,17 +353,27 @@ function Field({
 }
 
 function DocLink({ href, label }: { href: string; label: string }) {
+  // Auth-gated download via fetch→blob (lib/download.ts), not a plain link.
+  const [err, setErr] = useState<string | null>(null);
+  const filename = label.toLowerCase().includes('cover') ? 'CoverLetter.docx' : 'Resume.docx';
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--card)] px-3 py-1 text-xs font-medium text-[var(--muted2)] transition-colors hover:border-[var(--border-bright)] hover:text-[var(--cyan)]"
+    <button
+      type="button"
+      title={err ?? undefined}
+      onClick={async () => {
+        setErr(null);
+        try {
+          await downloadDoc(href, filename);
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : 'Download failed');
+        }
+      }}
+      className={`inline-flex items-center gap-1.5 rounded-full border bg-[var(--card)] px-3 py-1 text-xs font-medium transition-colors hover:border-[var(--border-bright)] hover:text-[var(--cyan)] ${err ? 'border-[var(--red)]/50 text-[var(--red)]' : 'border-[var(--border)] text-[var(--muted2)]'}`}
     >
       <FileText className="h-3.5 w-3.5" />
       {label}
       <ExternalLink className="h-3 w-3" />
-    </a>
+    </button>
   );
 }
 

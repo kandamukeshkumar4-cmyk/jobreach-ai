@@ -4,6 +4,7 @@ from openai import OpenAI
 from app.config import get_settings
 from app.database import get_db, get_supabase
 from app.models.schemas import ProfileCreate, ProfileOut
+from app.security import get_current_user_id, require_owned_profile
 import io
 import asyncio
 
@@ -68,7 +69,10 @@ class ResumeTextOut(BaseModel):
 
 
 @router.post("/parse-resume/", response_model=ResumeTextOut)
-async def parse_resume(file: UploadFile = File(...)):
+async def parse_resume(
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
     content = await file.read()
     if len(content) > _MAX_UPLOAD:
         raise HTTPException(413, "File too large — maximum 5 MB.")
@@ -113,13 +117,10 @@ async def parse_resume(file: UploadFile = File(...)):
 
 @router.get("/me", response_model=ProfileOut)
 async def get_my_profile(
-    authorization: str | None = Header(default=None),
     db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
 ):
     """Return the profile for the authenticated user (looks up by user_id in JWT)."""
-    user_id = _extract_user_id(authorization)
-    if not user_id:
-        raise HTTPException(401, "Authentication required")
     result = (
         db.table("profiles")
         .select("*")
@@ -136,31 +137,37 @@ async def get_my_profile(
 async def create_profile(
     payload: ProfileCreate,
     db=Depends(get_db),
-    authorization: str | None = Header(default=None),
+    user_id: str = Depends(get_current_user_id),
 ):
     row = payload.model_dump()
-    # Associate profile with the authenticated Supabase user so /me works
-    uid = _extract_user_id(authorization)
-    if uid:
-        row["user_id"] = uid
+    # Always bind the profile to the authenticated user (hard auth required).
+    row["user_id"] = user_id
     result = db.table("profiles").insert(row).execute()
     return result.data[0]
 
 
 @router.get("/{profile_id}", response_model=ProfileOut)
-async def get_profile(profile_id: str, db=Depends(get_db)):
-    result = db.table("profiles").select("*").eq("id", profile_id).single().execute()
-    if not result.data:
-        raise HTTPException(404, "Profile not found")
-    return result.data
+async def get_profile(
+    profile_id: str,
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    return require_owned_profile(db, profile_id, user_id)
 
 
 @router.put("/{profile_id}", response_model=ProfileOut)
-async def update_profile(profile_id: str, payload: ProfileCreate, db=Depends(get_db)):
+async def update_profile(
+    profile_id: str,
+    payload: ProfileCreate,
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    require_owned_profile(db, profile_id, user_id)  # 401 if unauth, 404 if not owned
     result = (
         db.table("profiles")
         .update(payload.model_dump())
         .eq("id", profile_id)
+        .eq("user_id", user_id)
         .execute()
     )
     if not result.data:

@@ -160,11 +160,12 @@ export default function NewMissionPage() {
       setActiveMission(result.id)
       router.push(`/missions/${result.id}`)
     } catch (err) {
-      setSubmitError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to launch mission. Please try again.',
-      )
+      const raw = err instanceof Error ? err.message : ''
+      // Backend returns 409 when a mission is already running (one at a time).
+      const friendly = raw.startsWith('409')
+        ? 'A mission is already running — let it finish before starting another.'
+        : raw || 'Failed to launch mission. Please try again.'
+      setSubmitError(friendly)
       setSubmitting(false)
       inFlightRef.current = false
     }

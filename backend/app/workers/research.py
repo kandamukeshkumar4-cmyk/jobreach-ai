@@ -29,19 +29,34 @@ Respond ONLY with valid JSON matching this schema exactly:
 }"""
 
 
+def _empty_research(summary: str = "") -> dict:
+    """The structured shape the match UI reads. `summary` carries the raw Exa
+    snippet that the scoring LLM now consumes directly (no separate extract call).
+    Structured keys stay present (mostly null) so match-detail never KeyErrors."""
+    return {"summary": summary, "funding_stage": None, "growth_signal": "unknown",
+            "remote_policy": "unknown", "layoffs_24mo": False, "glassdoor_sentiment": "unknown",
+            "tech_stack": [], "recent_news": None, "red_flags": [], "positive_signals": []}
+
+
 def run_company_research(company: str, job_url: str = "") -> dict:
-    """Plain function — call this directly from other tasks to avoid Celery subtask restrictions."""
+    """Plain function — call directly from score_job (avoids Celery subtask limits).
+
+    SPEED: no longer makes its own 70B LLM call or the slow Jina/Glassdoor fetch.
+    It does ONE fast Exa search and hands the raw snippet to the scoring LLM via
+    the `summary` field — so each role is a single LLM round-trip, not two.
+    Cached 24h per company, so repeat companies skip the network entirely."""
     s = get_settings()
     r = redis_lib.from_url(s.redis_url, decode_responses=True)
 
     cache_key = f"research:{company.lower().replace(' ', '_')}"
-    cached = r.get(cache_key)
-    if cached:
-        return json.loads(cached)
+    try:
+        cached = r.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
 
     raw_text = ""
-
-    # 1. Exa news search
     if s.exa_api_key:
         try:
             resp = requests.post(
@@ -53,66 +68,22 @@ def run_company_research(company: str, job_url: str = "") -> dict:
                     "type": "neural",
                     "contents": {"text": True},
                 },
-                timeout=20,
+                timeout=8,
             )
             if resp.status_code == 200:
                 for result in resp.json().get("results", []):
-                    raw_text += f"\n{result.get('title','')}\n{(result.get('text') or '')[:800]}\n"
+                    raw_text += f"\n{result.get('title','')}\n{(result.get('text') or '')[:600]}\n"
         except Exception as e:
             log.warning("exa_research_failed", company=company, error=str(e))
 
-    # 2. Jina Reader on Glassdoor snippet (best-effort)
-    glassdoor_url = f"https://www.glassdoor.com/Overview/Working-at-{company.replace(' ','-')}-EI_IE.htm"
+    result = _empty_research(summary=raw_text.strip()[:1800])
     try:
-        jina_resp = requests.get(
-            f"https://r.jina.ai/{glassdoor_url}",
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "text/plain"},
-            timeout=15,
-        )
-        if jina_resp.status_code == 200:
-            raw_text += f"\n[Glassdoor]\n{jina_resp.text[:1500]}\n"
+        r.setex(cache_key, 86400, json.dumps(result))
     except Exception:
         pass
-
-    if not raw_text.strip():
-        result = {"funding_stage": None, "growth_signal": "unknown", "remote_policy": "unknown",
-                  "layoffs_24mo": False, "glassdoor_sentiment": "unknown", "tech_stack": [],
-                  "recent_news": None, "red_flags": [], "positive_signals": []}
-        r.setex(cache_key, 86400, json.dumps(result))
-        return result
-
-    # 3. LLM to extract structured data
-    from openai import OpenAI
-    client = OpenAI(
-        api_key=s.nvidia_api_key,
-        base_url="https://integrate.api.nvidia.com/v1",
-    )
-    try:
-        msg = client.chat.completions.create(
-            model="meta/llama-3.3-70b-instruct",
-            max_tokens=512,
-            messages=[
-                {"role": "system", "content": RESEARCH_PROMPT_SYSTEM},
-                {"role": "user", "content": f"Company: {company}\n\nScraped data:\n{raw_text[:4000]}"},
-            ],
-        )
-        raw_json = msg.choices[0].message.content.strip()
-        if raw_json.startswith("```"):
-            raw_json = raw_json.split("```")[1]
-            if raw_json.startswith("json"):
-                raw_json = raw_json[4:]
-        result = json.loads(raw_json)
-    except Exception as e:
-        log.warning("research_llm_failed", company=company, error=str(e))
-        result = {"funding_stage": None, "growth_signal": "neutral", "remote_policy": "unknown",
-                  "layoffs_24mo": False, "glassdoor_sentiment": "unknown", "tech_stack": [],
-                  "recent_news": None, "red_flags": [], "positive_signals": []}
-
-    r.setex(cache_key, 86400, json.dumps(result))
     return result
 
 
 @celery_app.task(bind=True, queue="research", name="app.workers.research.fetch_company_research")
 def fetch_company_research(self, company: str, job_url: str = "") -> dict:
     return run_company_research(company, job_url)
-    return result

@@ -607,11 +607,15 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
 
         db.table("matches").update({"resume_ready": True}).eq("id", match_id).execute()
 
-        base_url = "https://jobreach-api.azurewebsites.net/api/v1/resumes"
-        download_url = f"{base_url}/{resume_id}/download" if resume_id else None
+        # RELATIVE API paths only — never a hardcoded prod host in generated DB
+        # rows. The frontend joins these with its configured API origin and
+        # fetches them WITH the bearer token (see frontend/lib/doc-url.ts).
+        # Mirrors the shape returned by GET /resumes/match/{id} in app/api/resumes.py.
+        base_path = f"/api/v1/resumes/{resume_id}" if resume_id else None
+        download_url = f"{base_path}/download" if base_path else None
         cover_letter_url = (
-            f"{base_url}/{resume_id}/cover-letter/download"
-            if (resume_id and cover_letter_b64) else None
+            f"{base_path}/cover-letter/download"
+            if (base_path and cover_letter_b64) else None
         )
 
         # Update applications table so the Resumes page can surface these docs

@@ -12,10 +12,15 @@ import {
   Download,
   AlertTriangle,
   Loader2,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  type LucideIcon,
 } from 'lucide-react';
-import { api, API_BASE } from '@/lib/api';
-import { getAccessToken } from '@/lib/supabase';
+import { api } from '@/lib/api';
+import { downloadDoc } from '@/lib/download';
 import { formatSalary } from '@/lib/format';
+import { parseTrust, parseRepost, type TrustInfo } from '@/lib/research';
 import type { MatchOut, ResumeTask } from '@/lib/types';
 import { LiquidGlassCard } from '@/components/ui/liquid-glass';
 import { ScoreRing } from '@/components/ui/score-ring';
@@ -24,6 +29,9 @@ import { Chip, type ChipTone } from '@/components/ui/chip';
 import { Button } from '@/components/ui/button';
 
 const POLL_INTERVAL_MS = 3000;
+// Hard cap on status polls (~6 min at 3s). Without it, a lost task record
+// (Redis flush, pre-deploy task) spins the "Tailoring…" state forever.
+const MAX_POLLS = 120;
 const MAX_DIMENSIONS = 5;
 
 // Celery task states surfaced by the resume pipeline.
@@ -32,6 +40,35 @@ type ResumeState = 'idle' | 'working' | 'success' | 'failure';
 interface ResearchChip {
   label: string;
   tone: ChipTone;
+}
+
+const TRUST_META: Record<
+  TrustInfo['level'],
+  { label: string; tone: ChipTone; icon: LucideIcon }
+> = {
+  high: { label: 'Trusted', tone: 'good', icon: ShieldCheck },
+  medium: { label: 'Check listing', tone: 'warn', icon: Shield },
+  low: { label: 'Caution', tone: 'flag', icon: ShieldAlert },
+};
+
+/** Shield-style listing-trust chip; tooltip lists the trust flags. */
+function TrustBadge({ trust }: { trust: TrustInfo }) {
+  const meta = TRUST_META[trust.level];
+  const Icon = meta.icon;
+  return (
+    <span
+      title={
+        trust.flags.length > 0
+          ? trust.flags.join(' · ')
+          : `Trust score ${trust.score}/100`
+      }
+    >
+      <Chip tone={meta.tone}>
+        <Icon className="h-3 w-3 shrink-0" />
+        {meta.label}
+      </Chip>
+    </span>
+  );
 }
 
 /**
@@ -191,34 +228,33 @@ export function MatchCard({ match }: MatchCardProps) {
   };
 
   const [downloading, setDownloading] = useState(false);
+  const pollCountRef = useRef(0);
 
   const handleDownload = async () => {
     if (!resumeUrl || downloading) return;
     setDownloading(true);
+    setResumeError(null);
     try {
-      const headers: Record<string, string> = {};
-      try {
-        const token = await getAccessToken();
-        if (token) headers.Authorization = `Bearer ${token}`;
-      } catch { /* no auth */ }
-      const res = await fetch(resumeUrl, { headers });
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = 'Resume.docx';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-    } catch {
-      window.open(resumeUrl, '_blank');
+      await downloadDoc(resumeUrl, 'Resume.docx');
+    } catch (err) {
+      setResumeError(err instanceof Error ? err.message : 'Download failed');
     } finally {
       setDownloading(false);
     }
   };
 
   const pollStatus = async (taskId: string) => {
+    // Cap the loop: a task whose status can never resolve (lost ownership
+    // record, evicted result) must not spin forever.
+    pollCountRef.current += 1;
+    if (pollCountRef.current > MAX_POLLS) {
+      stopPolling();
+      if (mountedRef.current) {
+        setResumeError('Timed out waiting for the resume — try again.');
+        setResumeState('failure');
+      }
+      return;
+    }
     try {
       const task = await api.resumes.status(taskId);
       if (!mountedRef.current) return;
@@ -233,8 +269,18 @@ export function MatchCard({ match }: MatchCardProps) {
         setResumeState('failure');
       }
       // else keep polling
-    } catch {
-      // Transient errors (e.g. cold start) shouldn't kill the poll loop;
+    } catch (err) {
+      // 404 = the task's ownership record is gone (server restart / expired
+      // record) — it will NEVER resolve, so stop instead of spinning forever.
+      if (err instanceof Error && err.message.startsWith('404')) {
+        stopPolling();
+        if (mountedRef.current) {
+          setResumeError('Lost track of this generation — please regenerate.');
+          setResumeState('failure');
+        }
+        return;
+      }
+      // Other transient errors (e.g. cold start) shouldn't kill the poll loop;
       // we keep trying on the next tick.
     }
   };
@@ -245,6 +291,7 @@ export function MatchCard({ match }: MatchCardProps) {
     setResumeError(null);
     setResumeUrl(null);
     stopPolling();
+    pollCountRef.current = 0;
 
     let task: ResumeTask;
     try {
@@ -311,6 +358,10 @@ export function MatchCard({ match }: MatchCardProps) {
     .slice(0, MAX_DIMENSIONS);
 
   const researchChips = buildResearchChips(match.company_research);
+  const trust = parseTrust(match.company_research);
+  const repost = parseRepost(match.company_research);
+  const showChipRow =
+    trust !== null || repost?.isRepost === true || researchChips.length > 0;
 
   return (
     <LiquidGlassCard className="flex h-full flex-col p-5">
@@ -366,9 +417,22 @@ export function MatchCard({ match }: MatchCardProps) {
         </p>
       )}
 
-      {/* Company research chips */}
-      {researchChips.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
+      {/* Company research chips (trust + repost first, then freeform research) */}
+      {showChipRow && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {trust && <TrustBadge trust={trust} />}
+          {repost?.isRepost && (
+            <Chip tone="warn">
+              Reposted
+              {repost.lastSeenDays != null && (
+                <>
+                  {' · seen '}
+                  <span className="font-mono">{repost.lastSeenDays}d</span>
+                  {' ago'}
+                </>
+              )}
+            </Chip>
+          )}
           {researchChips.map((chip, i) => (
             <Chip key={`${chip.label}-${i}`} tone={chip.tone}>
               {chip.label}
@@ -397,6 +461,15 @@ export function MatchCard({ match }: MatchCardProps) {
           ) : (
             <span className="font-medium">Resume ready</span>
           )}
+        </div>
+      )}
+
+      {/* Rendered in ANY state (a failed DOWNLOAD sets this while state is
+          still 'success' — it must not be silently swallowed). */}
+      {resumeError && resumeState !== 'failure' && (
+        <div className="mt-4 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--red)_30%,transparent)] bg-[color-mix(in_srgb,var(--red)_10%,transparent)] px-3 py-2 text-xs text-[var(--red)]">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>{resumeError}</span>
         </div>
       )}
 

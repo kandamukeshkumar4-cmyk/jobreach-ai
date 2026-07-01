@@ -24,7 +24,7 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
   const setActiveMission = useAppStore((s) => s.setActiveMission);
 
   // Live agent stream (replays history, then streams live events).
-  const { events, status: streamStatus } = useMissionStream(id);
+  const { events, status: streamStatus, lastEventAt, refresh } = useMissionStream(id);
   const meta = statusMeta(streamStatus);
   const live = meta.live;
 
@@ -141,7 +141,7 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
       )}
 
       {/* Live console */}
-      <MissionFeed events={events} status={streamStatus} mission={mission} missionTitle={title} />
+      <MissionFeed events={events} status={streamStatus} mission={mission} missionTitle={title} lastEventAt={lastEventAt} onRefreshStall={refresh} />
 
       {/* Meta bar */}
       {isLoading && !mission ? (

@@ -10,6 +10,11 @@ export type MissionStreamStatus = 'connecting' | 'running' | 'done' | 'failed';
 interface MissionStreamResult {
   events: MissionEventOut[];
   status: MissionStreamStatus;
+  /** epoch-ms of the most recent event's created_at (backend time). Used by the
+   * console to measure "silence since the backend last spoke" for stall UI. */
+  lastEventAt: number | null;
+  /** Force an immediate poll (used by the 60s "Possible stall" recovery affordance). */
+  refresh: () => void;
 }
 
 export interface MissionStatusMeta {
@@ -91,24 +96,36 @@ async function authHeaders(): Promise<Record<string, string>> {
  * Phase 3: final fetch, then a definitive done/failed status when the mission
  *          row reports terminal — set AFTER the trailing fetch so a zero-event
  *          terminal mission can never get stuck on "connecting"
+ *
+ * `refresh()` re-runs the effect (cancelling any backed-off timer) so the
+ * console's "Possible stall" affordance can demand an immediate poll.
  */
 export function useMissionStream(missionId: string): MissionStreamResult {
   const [events, setEvents] = useState<MissionEventOut[]>([]);
   const [status, setStatus] = useState<MissionStreamStatus>('connecting');
+  // Client-side timestamp of when we last RECEIVED a fresh event. Using client
+  // time (not the backend created_at) makes stall detection immune to
+  // client/server clock skew.
+  const [lastReceivedAt, setLastReceivedAt] = useState<number | null>(null);
 
   const cancelRef = useRef(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleRef = useRef(0);
+  // Holds the live poll() so refresh() can trigger an immediate poll WITHOUT
+  // re-running the effect (which would reset events/status and blank the feed).
+  const pollRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!missionId) return;
 
     setEvents([]);
     setStatus('connecting');
+    setLastReceivedAt(null);
     cancelRef.current = false;
+    idleRef.current = 0;
 
     const seen = new Set<string>();
     const idPath = encodeURIComponent(missionId);
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
-    let idle = 0;
 
     /** Fetch all events, append unseen ones. Returns true if terminal reached. */
     const fetchEvents = async (): Promise<boolean> => {
@@ -125,7 +142,8 @@ export function useMissionStream(missionId: string): MissionStreamResult {
           fresh.forEach((e) => seen.add(eventKey(e)));
           setEvents((prev) => [...prev, ...fresh]);
           setStatus((s) => (s === 'connecting' ? 'running' : s));
-          idle = 0;
+          setLastReceivedAt(Date.now());
+          idleRef.current = 0;
         }
 
         // Completion is determined by scanning ALL events, not just the tail —
@@ -172,20 +190,32 @@ export function useMissionStream(missionId: string): MissionStreamResult {
       }
 
       if (!cancelRef.current) {
-        idle += 1;
+        idleRef.current += 1;
         // Back off once the mission has gone quiet, to stop hammering the API.
-        const delay = idle > 20 ? 10_000 : 3_000;
-        pollTimer = setTimeout(poll, delay);
+        const delay = idleRef.current > 20 ? 10_000 : 3_000;
+        pollTimerRef.current = setTimeout(poll, delay);
       }
+    };
+
+    // Expose an immediate-poll trigger that reuses THIS effect's closure (same
+    // `seen` set, same events) — so the stall "Check for update" button forces a
+    // fetch without resetting the feed.
+    pollRef.current = () => {
+      if (cancelRef.current) return;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      idleRef.current = 0;
+      poll();
     };
 
     poll();
 
     return () => {
       cancelRef.current = true;
-      if (pollTimer) clearTimeout(pollTimer);
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
   }, [missionId]);
 
-  return { events, status };
+  const refresh = () => pollRef.current();
+
+  return { events, status, lastEventAt: lastReceivedAt, refresh };
 }

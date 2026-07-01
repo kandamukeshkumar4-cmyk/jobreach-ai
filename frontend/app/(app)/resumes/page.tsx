@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { downloadDoc } from '@/lib/download';
 import { relativeTime } from '@/lib/format';
 import type { ApplicationOut } from '@/lib/types';
 import { GradeBadge } from '@/components/ui/grade-badge';
@@ -228,6 +229,18 @@ function ResumeCard({ doc }: { doc: ResumeDoc }) {
   const color = companyColor(application.company || 'Z');
   const initial = (application.company || '?')[0].toUpperCase();
 
+  // Downloads go through an auth-bearing fetch (the routes are token-gated), not
+  // a plain link — see lib/download.ts.
+  const [docErr, setDocErr] = useState<string | null>(null);
+  const grab = async (url: string, name: string) => {
+    setDocErr(null);
+    try {
+      await downloadDoc(url, name);
+    } catch (e) {
+      setDocErr(e instanceof Error ? e.message : 'Download failed');
+    }
+  };
+
   return (
     <div className="group flex flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border-bright)] bg-[color-mix(in_srgb,var(--card)_82%,transparent)] transition-all duration-200 hover:border-[color-mix(in_srgb,var(--cyan)_40%,var(--border-bright))] hover:shadow-[0_0_32px_color-mix(in_srgb,var(--cyan)_8%,transparent)]">
       {/* Top accent */}
@@ -259,16 +272,15 @@ function ResumeCard({ doc }: { doc: ResumeDoc }) {
         {/* Download links */}
         <div className="flex flex-wrap gap-2">
           {resumeUrl ? (
-            <a
-              href={resumeUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
+              onClick={() => grab(resumeUrl, 'Resume.docx')}
               className="group/link inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--cyan)] hover:text-[var(--cyan)]"
             >
               <FileText className="h-3.5 w-3.5 text-[var(--muted2)] transition-colors group-hover/link:text-[var(--cyan)]" />
               Resume
               <ExternalLink className="h-3 w-3 text-[var(--muted)] transition-colors group-hover/link:text-[var(--cyan)]" />
-            </a>
+            </button>
           ) : (
             <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-[var(--border)] px-3 py-1.5 text-[12px] text-[var(--muted)]">
               <FileText className="h-3.5 w-3.5" />
@@ -277,18 +289,20 @@ function ResumeCard({ doc }: { doc: ResumeDoc }) {
           )}
 
           {coverLetterUrl && (
-            <a
-              href={coverLetterUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
+              onClick={() => grab(coverLetterUrl, 'CoverLetter.docx')}
               className="group/link inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--text)] transition-colors hover:border-[var(--violet)] hover:text-[var(--violet)]"
             >
               <FileSignature className="h-3.5 w-3.5 text-[var(--muted2)] transition-colors group-hover/link:text-[var(--violet)]" />
               Cover letter
               <ExternalLink className="h-3 w-3 text-[var(--muted)] transition-colors group-hover/link:text-[var(--violet)]" />
-            </a>
+            </button>
           )}
         </div>
+        {docErr && (
+          <p className="text-[11px] text-[var(--red)]">{docErr}</p>
+        )}
 
         {/* Footer */}
         <p className="text-[11px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>

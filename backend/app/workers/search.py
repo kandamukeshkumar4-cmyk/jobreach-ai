@@ -15,7 +15,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from celery import Task
 from app.workers.celery_app import celery_app, _redis_url_with_ssl
-from app.database import get_db
+from app.database import get_db, new_db
 from app.config import get_settings
 import redis
 import structlog
@@ -27,7 +27,13 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 
 # Max postings dispatched to the (LLM) scoring pipeline per mission. Keeps mission
 # wall-time reasonable (2 Celery workers) now that the source funnel is much larger.
-SCORE_CAP = 30
+# Deep-scoring is the slow phase; cap the prioritized roles so a whole mission
+# finishes under ~2 min. Top-15 by prior filtering still covers the strong matches.
+SCORE_CAP = 15
+
+# Conservative per-job scoring rate (seconds) used to seed the ETA before any real
+# scoring data exists. score_job refines this from the actual rolling rate.
+_SCORE_RATE_SEED = 12
 
 # Definitive "this posting is closed" signals — kept narrow to avoid false positives
 # from nav/footer text. Only used on the page body, lowercased.
@@ -63,7 +69,7 @@ _REMOTEOK_NON_US_SIGNALS = frozenset([
 
 def _pub(r: redis.Redis, mission_id: str, event_type: str, message: str, detail: str = None, meta: dict = None):
     """Persist event to DB and publish to Redis pub/sub for SSE streaming."""
-    db = get_db()
+    db = new_db()
     row = {
         "mission_id": mission_id,
         "event_type": event_type,
@@ -89,7 +95,7 @@ def run_mission(self: Task, mission_id: str):
     """
     s = get_settings()
     r = redis.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
-    db = get_db()
+    db = new_db()
 
     try:
         # Mark running
@@ -104,51 +110,68 @@ def run_mission(self: Task, mission_id: str):
         location = mission_row.get("location_filter", "")
         salary_min = mission_row.get("salary_min", 0)
 
-        _pub(r, mission_id, "ok", f"Candidate profile loaded — {len(profile.get('archetypes',[]))} archetypes detected")
+        _pub(r, mission_id, "ok", f"Candidate profile loaded — {len(profile.get('archetypes',[]))} archetypes detected",
+             meta={"stage": "init"})
 
         # ── EXA SEMANTIC SEARCH ──────────────────────────────────────────────
         raw_jobs = []
 
         if "exa" in sources:
-            _pub(r, mission_id, "run", f"Scanning Exa semantic web search for: '{query}'...")
+            _pub(r, mission_id, "run", f"Scanning Exa semantic web search for: '{query}'...",
+                 meta={"stage": "search", "provider": "exa", "source": "exa"})
             exa_jobs = _search_exa(query, location, s.exa_api_key)
             raw_jobs.extend(exa_jobs)
-            _pub(r, mission_id, "ok", f"Exa returned {len(exa_jobs)} postings")
+            _pub(r, mission_id, "ok", f"Exa returned {len(exa_jobs)} postings",
+                 meta={"stage": "search", "provider": "exa", "source": "exa", "count": len(exa_jobs),
+                       "scanned": len(raw_jobs)})
 
         # ── ATS FEEDS (Greenhouse, Lever, Ashby, SmartRecruiters) ────────────
         ats_sources = [src for src in sources
                        if src in ("greenhouse", "lever", "ashby", "smartrecruiters")]
         if ats_sources:
-            _pub(r, mission_id, "run", f"Scanning ATS feeds: {', '.join(ats_sources).title()}...")
+            _pub(r, mission_id, "run", f"Scanning ATS feeds: {', '.join(ats_sources).title()}...",
+                 meta={"stage": "boards", "provider": ",".join(ats_sources)})
             ats_jobs = _search_ats_feeds(query, location, ats_sources)
             raw_jobs.extend(ats_jobs)
             _pub(r, mission_id, "ok", f"ATS feeds returned {len(ats_jobs)} postings",
-                 detail=" | ".join(f"{src}: {len([j for j in ats_jobs if j.get('source')==src])}" for src in ats_sources))
+                 detail=" | ".join(f"{src}: {len([j for j in ats_jobs if j.get('source')==src])}" for src in ats_sources),
+                 meta={"stage": "boards", "provider": ",".join(ats_sources), "count": len(ats_jobs),
+                       "scanned": len(raw_jobs),
+                       "by_source": {src: len([j for j in ats_jobs if j.get("source") == src]) for src in ats_sources}})
 
         # ── WORKABLE (US job board, all 35k+ Workable companies) ─────────────
         if "workable" in sources:
-            _pub(r, mission_id, "run", "Scanning Workable US job board...")
+            _pub(r, mission_id, "run", "Scanning Workable US job board...",
+                 meta={"stage": "boards", "provider": "workable", "source": "workable"})
             workable_jobs = _search_workable(query)
             raw_jobs.extend(workable_jobs)
-            _pub(r, mission_id, "ok", f"Workable returned {len(workable_jobs)} postings")
+            _pub(r, mission_id, "ok", f"Workable returned {len(workable_jobs)} postings",
+                 meta={"stage": "boards", "provider": "workable", "source": "workable",
+                       "count": len(workable_jobs), "scanned": len(raw_jobs)})
 
         # ── REMOTEOK (US-eligible remote roles, JSON API) ────────────────────
         if "remoteok" in sources:
-            _pub(r, mission_id, "run", "Scanning RemoteOK for US-eligible remote roles...")
+            _pub(r, mission_id, "run", "Scanning RemoteOK for US-eligible remote roles...",
+                 meta={"stage": "boards", "provider": "remoteok", "source": "remoteok"})
             remoteok_jobs = _search_remoteok(query)
             raw_jobs.extend(remoteok_jobs)
-            _pub(r, mission_id, "ok", f"RemoteOK returned {len(remoteok_jobs)} postings")
+            _pub(r, mission_id, "ok", f"RemoteOK returned {len(remoteok_jobs)} postings",
+                 meta={"stage": "boards", "provider": "remoteok", "source": "remoteok",
+                       "count": len(remoteok_jobs), "scanned": len(raw_jobs)})
 
         # ── RSS FEEDS ─────────────────────────────────────────────────────────
         if "rss" in sources:
-            _pub(r, mission_id, "run", "Scanning RSS job feeds (Remotive, WeWorkRemotely)...")
+            _pub(r, mission_id, "run", "Scanning RSS job feeds (Remotive, WeWorkRemotely)...",
+                 meta={"stage": "boards", "provider": "rss", "source": "rss"})
             rss_jobs = _search_rss(query)
             raw_jobs.extend(rss_jobs)
-            _pub(r, mission_id, "ok", f"RSS feeds returned {len(rss_jobs)} postings")
+            _pub(r, mission_id, "ok", f"RSS feeds returned {len(rss_jobs)} postings",
+                 meta={"stage": "boards", "provider": "rss", "source": "rss",
+                       "count": len(rss_jobs), "scanned": len(raw_jobs)})
 
         total_scanned = len(raw_jobs)
         _pub(r, mission_id, "ok", f"Scanned {total_scanned:,} postings across {len(sources)} sources",
-             meta={"total_scanned": total_scanned})
+             meta={"stage": "search", "scanned": total_scanned, "total_scanned": total_scanned})
 
         # ── DEDUPLICATE ───────────────────────────────────────────────────────
         seen_urls = set()
@@ -159,7 +182,8 @@ def run_mission(self: Task, mission_id: str):
                 unique_jobs.append(j)
 
         # ── FILTER (location, role, conservative salary) ─────────────────────
-        _pub(r, mission_id, "run", f"Applying profile filters: location={location or 'any'}, salary≥${salary_min or 0:,}...")
+        _pub(r, mission_id, "run", f"Applying profile filters: location={location or 'any'}, salary≥${salary_min or 0:,}...",
+             meta={"stage": "filter", "scanned": total_scanned})
         filtered = _filter_jobs(unique_jobs, profile, location, salary_min)
         # Round-robin interleave by source so the SCORE_CAP cap samples ACROSS
         # providers. Without this, Exa (appended first, ~100 results) fills the
@@ -167,7 +191,12 @@ def run_mission(self: Task, mission_id: str):
         # RemoteOK — they get scanned but never reach scoring.
         filtered = _interleave_by_source(filtered)
         total_filtered = len(filtered)
-        _pub(r, mission_id, "ok", f"Filtered to {total_filtered} matching roles ({total_scanned - total_filtered} eliminated)")
+        _pub(r, mission_id, "ok", f"Filtered to {total_filtered} matching roles ({total_scanned - total_filtered} eliminated)",
+             meta={"stage": "filter", "filtered": total_filtered, "scanned": total_scanned,
+                   # filtered_out = removed by profile/filter rules; distinct from
+                   # dead_pruned (liveness). `pruned` kept for old-event back-compat.
+                   "filtered_out": total_scanned - total_filtered,
+                   "pruned": total_scanned - total_filtered})
 
         # ── BOUND THE CANDIDATE SET BEFORE LIVENESS ──────────────────────────
         # Liveness does one HTTP GET per posting, so only verify what could
@@ -175,21 +204,32 @@ def run_mission(self: Task, mission_id: str):
         if total_filtered > SCORE_CAP:
             _pub(r, mission_id, "info",
                  f"Prioritizing top {SCORE_CAP} of {total_filtered} matching roles for deep scoring",
-                 meta={"capped_from": total_filtered, "cap": SCORE_CAP})
+                 meta={"stage": "filter", "capped_from": total_filtered, "cap": SCORE_CAP,
+                       "queued": SCORE_CAP, "filtered": total_filtered})
         candidates = filtered[:SCORE_CAP * 2]
 
         # ── LIVENESS VERIFICATION (drop dead/closed postings) ────────────────
-        _pub(r, mission_id, "run", f"Verifying {len(candidates)} postings are still live...")
+        _pub(r, mission_id, "run", f"Verifying {len(candidates)} postings are still live...",
+             meta={"stage": "verify", "total": len(candidates), "scanned": total_scanned,
+                   "filtered": total_filtered})
         live_jobs, dead_count = _verify_liveness(candidates)
+        verified = len(live_jobs)
         # NOTE: use "info" (not "warn") — score worker counts "warn" events as
         # attempted jobs when deciding mission completion.
         if dead_count:
-            _pub(r, mission_id, "info", f"Pruned {dead_count} dead/closed postings — {len(live_jobs)} verified live",
-                 meta={"dead_pruned": dead_count})
+            _pub(r, mission_id, "info", f"Pruned {dead_count} dead/closed postings — {verified} verified live",
+                 meta={"stage": "verify", "verified": verified,
+                       # dead_pruned = removed by liveness; distinct from filtered_out.
+                       "dead_pruned": dead_count, "pruned": dead_count,
+                       "scanned": total_scanned, "filtered": total_filtered})
         else:
-            _pub(r, mission_id, "ok", f"All {len(live_jobs)} postings verified live")
+            _pub(r, mission_id, "ok", f"All {verified} postings verified live",
+                 meta={"stage": "verify", "verified": verified,
+                       "dead_pruned": 0, "pruned": 0,
+                       "scanned": total_scanned, "filtered": total_filtered})
 
         to_score = live_jobs[:SCORE_CAP]
+        queued = len(to_score)
 
         # ── PERSIST JOBS & DISPATCH SCORING ──────────────────────────────────
         job_ids = _persist_jobs(db, to_score)
@@ -208,14 +248,28 @@ def run_mission(self: Task, mission_id: str):
                 "total_matches": 0,
             }).eq("id", mission_id).execute()
             _pub(r, mission_id, "star", "<strong>0 matches found</strong> — no live roles passed your filters",
-                 meta={"strong_matches": 0, "total_scored": 0})
-            _pub(r, mission_id, "ok", "Mission complete")
+                 meta={"stage": "complete", "strong_matches": 0, "total_scored": 0,
+                       "scanned": total_scanned, "filtered": total_filtered, "verified": verified})
+            _pub(r, mission_id, "ok", "Mission complete", meta={"stage": "complete"})
+            from app.security import release_mission_lock
+            release_mission_lock(r, mission_row.get("user_id"), mission_id)
             return {"status": "completed_empty", "total_filtered": 0}
 
-        _pub(r, mission_id, "run", f"Deep-researching {len(job_ids)} companies and scoring roles...")
+        # ETA: scoring is the dominant phase. Seed a conservative per-job rate
+        # (research + LLM ~12s); the score worker refines this from the real rate
+        # and emits an updated eta_seconds on each completed job.
+        eta_seconds = queued * _SCORE_RATE_SEED
+        _pub(r, mission_id, "run", f"Deep-researching {queued} companies and scoring roles...",
+             meta={"stage": "score", "queued": queued, "scanned": total_scanned,
+                   "filtered": total_filtered, "verified": verified,
+                   "total": queued, "eta_seconds": eta_seconds})
+        # Seed the scoring total in Redis so score_job can read it without a DB
+        # round-trip. score_job owns the start timestamp (setnx) + attempted counter.
+        r.hset(f"mission:{mission_id}:rate", mapping={"total": queued})
         # Reset the atomic completion counter so stale events from any prior run
         # don't pre-inflate the "attempted" tally in _check_mission_complete.
         r.delete(f"mission:{mission_id}:attempted")
+        r.delete(f"mission:{mission_id}:score_start_ms")
         for job_id in job_ids:
             from app.workers.score import score_job
             score_job.delay(mission_id, job_id, profile)
@@ -226,7 +280,17 @@ def run_mission(self: Task, mission_id: str):
     except Exception as exc:
         log.error("mission_failed", mission_id=mission_id, error=str(exc))
         db.table("missions").update({"status": "failed"}).eq("id", mission_id).execute()
-        _pub(r, mission_id, "error", f"Mission failed: {exc}")
+        _pub(r, mission_id, "error", f"Mission failed: {exc}",
+             meta={"stage": "complete", "error": str(exc)})
+        # Release the per-user concurrency lock so a failed mission doesn't block
+        # the user for the full 600s TTL.
+        try:
+            uid = (db.table("missions").select("user_id").eq("id", mission_id)
+                   .single().execute().data or {}).get("user_id")
+            from app.security import release_mission_lock
+            release_mission_lock(r, uid, mission_id)
+        except Exception:
+            pass
         raise
 
 
@@ -290,6 +354,10 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
     Greenhouse:      https://boards-api.greenhouse.io/v1/boards/{co}/jobs?content=true
     Lever:           https://api.lever.co/v0/postings/{co}?mode=json
     SmartRecruiters: https://api.smartrecruiters.com/v1/companies/{co}/postings
+
+    Companies within each ATS are fetched concurrently (ThreadPoolExecutor) —
+    previously this loop was sequential and dominated mission wall-time when any
+    board was slow (18 Greenhouse boards × 10s timeout = 180s worst case alone).
     """
     jobs = []
     keywords = [k for k in query.lower().split() if len(k) > 2]
@@ -298,8 +366,10 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
         t = (title or "").lower()
         return any(kw in t for kw in keywords) if keywords else True
 
+    # ── Greenhouse ──
     if "greenhouse" in sources:
-        for co in GREENHOUSE_COS:
+        def _gh(co: str) -> list:
+            out = []
             try:
                 resp = requests.get(
                     f"https://boards-api.greenhouse.io/v1/boards/{co}/jobs?content=true",
@@ -310,7 +380,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                         if _hit(j.get("title", "")):
                             content = j.get("content", "") or ""
                             smin, smax = _parse_salary(f"{j.get('title','')} {content}")
-                            jobs.append({
+                            out.append({
                                 "title": j["title"],
                                 "url": j.get("absolute_url", ""),
                                 "company": co.title(),
@@ -321,10 +391,14 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                                 "salary_max": smax,
                             })
             except Exception:
-                continue
+                pass
+            return out
+        jobs.extend(_parallel_flatten(_gh, GREENHOUSE_COS))
 
+    # ── Lever ──
     if "lever" in sources:
-        for co in LEVER_COS:
+        def _lv(co: str) -> list:
+            out = []
             try:
                 resp = requests.get(f"https://api.lever.co/v0/postings/{co}?mode=json",
                                     headers={"User-Agent": _UA}, timeout=10)
@@ -333,7 +407,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                         if _hit(j.get("text", "")):
                             desc = j.get("descriptionPlain", "") or ""
                             smin, smax = _parse_salary(f"{j.get('text','')} {desc}")
-                            jobs.append({
+                            out.append({
                                 "title": j["text"],
                                 "url": j.get("hostedUrl", ""),
                                 "company": co.title(),
@@ -344,13 +418,17 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                                 "salary_max": smax,
                             })
             except Exception:
-                continue
+                pass
+            return out
+        jobs.extend(_parallel_flatten(_lv, LEVER_COS))
 
+    # ── SmartRecruiters ──
     if "smartrecruiters" in sources:
         # ISO-2 → display name for country codes SmartRecruiters returns (e.g. "us" → "United States")
         _SR_COUNTRY = {"us": "United States", "ca": "Canada", "gb": "United Kingdom",
                        "de": "Germany", "fr": "France", "au": "Australia", "in": "India"}
-        for co in SMARTRECRUITERS_COS:
+        def _sr(co: str) -> list:
+            out = []
             try:
                 resp = requests.get(
                     f"https://api.smartrecruiters.com/v1/companies/{co}/postings?limit=100",
@@ -363,8 +441,6 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                             if loc.get("remote"):
                                 loc_str = "Remote"
                             else:
-                                # fullLocation ("Austin, TX, United States") is best;
-                                # fall back to city + region + normalized country code.
                                 full = loc.get("fullLocation") or ""
                                 if full:
                                     loc_str = full
@@ -372,14 +448,13 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                                     country_raw = (loc.get("country") or loc.get("countryCode") or "").lower()
                                     country = _SR_COUNTRY.get(country_raw, loc.get("country") or "")
                                     loc_str = ", ".join(filter(None, [loc.get("city"), loc.get("region"), country]))
-                            # List endpoint has no JD body; build a useful snippet from structured metadata.
                             dept = (j.get("department") or {}).get("label", "")
                             industry = (j.get("industry") or {}).get("label", "")
                             exp = (j.get("experienceLevel") or {}).get("label", "")
                             emp_type = (j.get("typeOfEmployment") or {}).get("label", "")
                             description_snippet = " | ".join(filter(None, [dept, industry, exp, emp_type]))
                             uuid = j.get("id", "")
-                            jobs.append({
+                            out.append({
                                 "title": j["name"],
                                 "url": f"https://jobs.smartrecruiters.com/{co}/{uuid}",
                                 "company": co,
@@ -390,10 +465,14 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                                 "salary_max": None,
                             })
             except Exception:
-                continue
+                pass
+            return out
+        jobs.extend(_parallel_flatten(_sr, SMARTRECRUITERS_COS))
 
+    # ── Ashby ──
     if "ashby" in sources:
-        for co in ASHBY_COS:
+        def _as(co: str) -> list:
+            out = []
             try:
                 resp = requests.get(
                     f"https://api.ashbyhq.com/posting-api/job-board/{co}?includeCompensation=true",
@@ -407,16 +486,13 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                             comp = ((j.get("compensation") or {})
                                     .get("scrapeableCompensationSalarySummary") or "")
                             desc = j.get("descriptionPlain", "") or ""
-                            # Compensation summary first so the clean "$211K - $290K" wins.
                             smin, smax = _parse_salary(f"{comp} {j.get('title','')} {desc[:400]}")
                             raw_loc = (j.get("location") or "").strip()
                             if j.get("isRemote"):
-                                # Preserve location text so _filter_jobs can reject
-                                # EU-restricted remote postings (e.g. "Remote, Europe").
                                 ashby_loc = f"Remote, {raw_loc}" if raw_loc else "Remote"
                             else:
                                 ashby_loc = raw_loc
-                            jobs.append({
+                            out.append({
                                 "title": (j.get("title") or "").strip(),
                                 "url": j.get("jobUrl", ""),
                                 "company": co.title(),
@@ -427,9 +503,46 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
                                 "salary_max": smax,
                             })
             except Exception:
-                continue
+                pass
+            return out
+        jobs.extend(_parallel_flatten(_as, ASHBY_COS))
 
     return jobs
+
+
+def _parallel_flatten(fn, items: list, workers: int = 12) -> list:
+    """Run `fn(item)` over `items` concurrently, flatten the list-of-lists.
+
+    Single-threaded fallback when the pool can't start (e.g. tight Celery worker
+    memory). One slow board never blocks the others — as_completed drains fast
+    boards first so their postings join the funnel immediately."""
+    if not items:
+        return []
+    out: list = []
+    try:
+        with ThreadPoolExecutor(max_workers=min(workers, len(items))) as pool:
+            # submit + as_completed (NOT pool.map, which yields in submission
+            # order): a slow leading board can't block faster boards from joining
+            # the funnel. Per-future try/except so one failing board can't abort
+            # the batch or leak its exception out of the loop.
+            futures = [pool.submit(fn, item) for item in items]
+            for fut in as_completed(futures):
+                try:
+                    res = fut.result()
+                except Exception:
+                    res = None
+                if res:
+                    out.extend(res)
+    except Exception:
+        # Pool couldn't even start (tight worker memory) → sequential fallback.
+        for item in items:
+            try:
+                res = fn(item)
+                if res:
+                    out.extend(res)
+            except Exception:
+                continue
+    return out
 
 
 def _search_remoteok(query: str) -> list:
@@ -735,20 +848,20 @@ def _verify_liveness(jobs: list):
     """Concurrently liveness-check postings. Returns (live_jobs, dead_count)."""
     if not jobs:
         return [], 0
-    live = []
-    dead = 0
+    # Check concurrently but REBUILD in original candidate order, so the priority
+    # ranking survives liveness and to_score = live[:SCORE_CAP] keeps the top roles
+    # (appending in completion order would shuffle the ranking).
+    ok_by_idx: dict = {}
     with ThreadPoolExecutor(max_workers=12) as pool:
-        futures = {pool.submit(_check_one_live, j): j for j in jobs}
+        futures = {pool.submit(_check_one_live, j): i for i, j in enumerate(jobs)}
         for fut in as_completed(futures):
-            j = futures[fut]
+            i = futures[fut]
             try:
-                ok = fut.result()
+                ok_by_idx[i] = fut.result()
             except Exception:
-                ok = True  # never drop on checker error
-            if ok:
-                live.append(j)
-            else:
-                dead += 1
+                ok_by_idx[i] = True  # never drop on checker error
+    live = [j for i, j in enumerate(jobs) if ok_by_idx.get(i, True)]
+    dead = len(jobs) - len(live)
     return live, dead
 
 
