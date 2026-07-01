@@ -1,6 +1,6 @@
 """
 Search worker — wraps Agent-Reach sourcing channels.
-Orchestrates the full mission: search → filter → liveness → kick off scoring.
+Orchestrates the full mission: search → filter → liveness → bounded scoring.
 
 US job market focus:
 - Sources: Exa, ATS feeds (Greenhouse, Lever, Ashby, Workable, SmartRecruiters),
@@ -12,6 +12,7 @@ US job market focus:
 import json
 import re
 import requests
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from celery import Task
 from app.workers.celery_app import celery_app, _redis_url_with_ssl
@@ -25,15 +26,27 @@ log = structlog.get_logger()
 # Browser-ish UA — some ATS/job hosts 403 the default python-requests UA
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
-# Max postings dispatched to the (LLM) scoring pipeline per mission. Keeps mission
-# wall-time reasonable (2 Celery workers) now that the source funnel is much larger.
-# Deep-scoring is the slow phase; cap the prioritized roles so a whole mission
-# finishes under ~2 min. Top-15 by prior filtering still covers the strong matches.
-SCORE_CAP = 15
+# Hard wall-clock target for an end-to-end mission. This is a product contract,
+# not just a UI ETA: search, liveness, scoring, match writes, and completion
+# events must all fit inside this budget whenever external services respond.
+MISSION_TARGET_SECONDS = 120
+MISSION_FINISH_RESERVE_SECONDS = 8
 
-# Conservative per-job scoring rate (seconds) used to seed the ETA before any real
-# scoring data exists. score_job refines this from the actual rolling rate.
+# Keep enough real postings for the user to inspect. Slow LLM scoring is capped
+# separately; anything beyond the LLM budget gets a deterministic fallback grade
+# instead of leaving the mission running or dropping real results.
+RESULT_CAP = 30
+
+# Slow LLM scoring is intentionally disabled in the 120-second critical path:
+# external rate limits/timeouts must not decide whether a mission completes.
+# Keep the budgeting helper for a future post-completion refinement path.
 _SCORE_RATE_SEED = 12
+LLM_SCORE_CAP = 0
+_FAST_SCORE_RATE_SEED = 1.0
+
+# Back-compat for older imports that treat SCORE_CAP as the number of result rows
+# a mission may produce.
+SCORE_CAP = RESULT_CAP
 
 # Definitive "this posting is closed" signals — kept narrow to avoid false positives
 # from nav/footer text. Only used on the page body, lowercased.
@@ -56,6 +69,28 @@ _NON_US_ONLY = frozenset([
     "india", "asia", "apac", "singapore", "latam", "latin america", "africa",
     "middle east",
 ])
+
+
+def _score_slots_for_budget(remaining_seconds: float, per_job_seconds: float = _SCORE_RATE_SEED) -> int:
+    """Number of slow LLM scoring slots that fit before the mission deadline.
+
+    Always allow one slot when there is any meaningful room, then fast-score the
+    rest. This keeps quality for the first result while preventing an unbounded
+    queue of slow calls from breaking the 120-second mission contract.
+    """
+    min_llm_window = MISSION_FINISH_RESERVE_SECONDS + min(6, per_job_seconds)
+    if remaining_seconds < min_llm_window or per_job_seconds <= 0:
+        return 0
+    slots = int((remaining_seconds - MISSION_FINISH_RESERVE_SECONDS) // per_job_seconds)
+    return max(1, slots)
+
+
+def _result_slots_for_budget(remaining_seconds: float, per_job_seconds: float = _FAST_SCORE_RATE_SEED) -> int:
+    """Number of match rows that can be safely written before the deadline."""
+    if remaining_seconds <= MISSION_FINISH_RESERVE_SECONDS or per_job_seconds <= 0:
+        return 0
+    slots = int((remaining_seconds - MISSION_FINISH_RESERVE_SECONDS) // per_job_seconds)
+    return max(1, min(RESULT_CAP, slots))
 
 # RemoteOK location strings that unambiguously indicate a non-US restriction.
 _REMOTEOK_NON_US_SIGNALS = frozenset([
@@ -91,15 +126,21 @@ def run_mission(self: Task, mission_id: str):
     2. Search all sources (Exa, ATS feeds, RemoteOK, RSS)
     3. Filter by profile (location, role, salary)
     4. Liveness-verify surviving postings (drop dead links)
-    5. Dispatch scoring worker for each match
+    5. Score the bounded result set and complete the mission
     """
     s = get_settings()
     r = redis.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
     db = new_db()
+    started_monotonic = time.monotonic()
+    deadline_ms = int(time.time() * 1000) + (MISSION_TARGET_SECONDS * 1000)
 
     try:
         # Mark running
         db.table("missions").update({"status": "running"}).eq("id", mission_id).execute()
+        r.hset(f"mission:{mission_id}:rate", mapping={
+            "target_seconds": MISSION_TARGET_SECONDS,
+            "deadline_ms": deadline_ms,
+        })
 
         # Load mission + profile
         mission_row = db.table("missions").select("*, profiles(*)").eq("id", mission_id).single().execute().data
@@ -199,14 +240,15 @@ def run_mission(self: Task, mission_id: str):
                    "pruned": total_scanned - total_filtered})
 
         # ── BOUND THE CANDIDATE SET BEFORE LIVENESS ──────────────────────────
-        # Liveness does one HTTP GET per posting, so only verify what could
-        # actually be scored: at most SCORE_CAP*2 (headroom for dead-link pruning).
-        if total_filtered > SCORE_CAP:
+        # Liveness does one HTTP GET per posting, so verify only what could still
+        # become a result row inside the 120s mission budget.
+        verify_cap = RESULT_CAP + 10  # headroom for dead-link pruning
+        if total_filtered > RESULT_CAP:
             _pub(r, mission_id, "info",
-                 f"Prioritizing top {SCORE_CAP} of {total_filtered} matching roles for deep scoring",
-                 meta={"stage": "filter", "capped_from": total_filtered, "cap": SCORE_CAP,
-                       "queued": SCORE_CAP, "filtered": total_filtered})
-        candidates = filtered[:SCORE_CAP * 2]
+                 f"Prioritizing top {RESULT_CAP} of {total_filtered} matching roles for scoring",
+                 meta={"stage": "filter", "capped_from": total_filtered, "cap": RESULT_CAP,
+                       "queued": RESULT_CAP, "filtered": total_filtered})
+        candidates = filtered[:verify_cap]
 
         # ── LIVENESS VERIFICATION (drop dead/closed postings) ────────────────
         _pub(r, mission_id, "run", f"Verifying {len(candidates)} postings are still live...",
@@ -228,7 +270,14 @@ def run_mission(self: Task, mission_id: str):
                        "dead_pruned": 0, "pruned": 0,
                        "scanned": total_scanned, "filtered": total_filtered})
 
-        to_score = live_jobs[:SCORE_CAP]
+        remaining_after_verify = max(0, MISSION_TARGET_SECONDS - (time.monotonic() - started_monotonic))
+        result_slots = min(len(live_jobs), _result_slots_for_budget(remaining_after_verify, _FAST_SCORE_RATE_SEED))
+        if live_jobs and result_slots < min(len(live_jobs), RESULT_CAP):
+            _pub(r, mission_id, "info",
+                 f"Deadline budget allows scoring top {result_slots} live roles this run",
+                 meta={"stage": "score", "queued": result_slots, "cap": RESULT_CAP,
+                       "available": len(live_jobs), "remaining_seconds": int(remaining_after_verify)})
+        to_score = live_jobs[:result_slots]
         queued = len(to_score)
 
         # ── PERSIST JOBS & DISPATCH SCORING ──────────────────────────────────
@@ -243,11 +292,13 @@ def run_mission(self: Task, mission_id: str):
 
         # No jobs to score → close the mission now, otherwise it hangs in "running".
         if not job_ids:
+            empty_reason = ("deadline budget was exhausted before scoring"
+                            if live_jobs else "no live roles passed your filters")
             db.table("missions").update({
                 "status": "completed",
                 "total_matches": 0,
             }).eq("id", mission_id).execute()
-            _pub(r, mission_id, "star", "<strong>0 matches found</strong> — no live roles passed your filters",
+            _pub(r, mission_id, "star", f"<strong>0 matches found</strong> — {empty_reason}",
                  meta={"stage": "complete", "strong_matches": 0, "total_scored": 0,
                        "scanned": total_scanned, "filtered": total_filtered, "verified": verified})
             _pub(r, mission_id, "ok", "Mission complete", meta={"stage": "complete"})
@@ -255,27 +306,37 @@ def run_mission(self: Task, mission_id: str):
             release_mission_lock(r, mission_row.get("user_id"), mission_id)
             return {"status": "completed_empty", "total_filtered": 0}
 
-        # ETA: scoring is the dominant phase. Seed a conservative per-job rate
-        # (research + LLM ~12s); the score worker refines this from the real rate
-        # and emits an updated eta_seconds on each completed job.
-        eta_seconds = queued * _SCORE_RATE_SEED
-        _pub(r, mission_id, "run", f"Deep-researching {queued} companies and scoring roles...",
+        # Scoring is the dominant phase. Fit slow LLM scoring into the remaining
+        # mission budget, then fast-score the rest with the same persisted match
+        # contract. This prevents an unbounded score queue from timing out while
+        # still returning real jobs.
+        elapsed = time.monotonic() - started_monotonic
+        remaining = max(0, MISSION_TARGET_SECONDS - elapsed)
+        llm_slots = min(LLM_SCORE_CAP, _score_slots_for_budget(remaining, _SCORE_RATE_SEED), queued)
+        eta_seconds = min(remaining, max(1, llm_slots) * _SCORE_RATE_SEED)
+        fast_slots = max(0, queued - llm_slots)
+        _pub(r, mission_id, "run", f"Scoring {queued} roles ({llm_slots} deep, {fast_slots} fast)...",
              meta={"stage": "score", "queued": queued, "scanned": total_scanned,
                    "filtered": total_filtered, "verified": verified,
-                   "total": queued, "eta_seconds": eta_seconds})
-        # Seed the scoring total in Redis so score_job can read it without a DB
-        # round-trip. score_job owns the start timestamp (setnx) + attempted counter.
-        r.hset(f"mission:{mission_id}:rate", mapping={"total": queued})
+                   "total": queued, "eta_seconds": int(eta_seconds),
+                   "llm_slots": llm_slots, "fast_slots": fast_slots,
+                   "target_seconds": MISSION_TARGET_SECONDS})
+        # Seed the scoring total in Redis so progress and ETA can be computed
+        # without DB round-trips.
+        r.hset(f"mission:{mission_id}:rate", mapping={
+            "total": queued,
+            "deadline_ms": deadline_ms,
+            "target_seconds": MISSION_TARGET_SECONDS,
+        })
         # Reset the atomic completion counter so stale events from any prior run
         # don't pre-inflate the "attempted" tally in _check_mission_complete.
         r.delete(f"mission:{mission_id}:attempted")
         r.delete(f"mission:{mission_id}:score_start_ms")
-        for job_id in job_ids:
-            from app.workers.score import score_job
-            score_job.delay(mission_id, job_id, profile)
+        from app.workers.score import score_jobs_for_mission
+        score_jobs_for_mission(db, r, mission_id, job_ids, profile,
+                               deadline_ms=deadline_ms, llm_limit=llm_slots)
 
-        # score_job tasks will update mission status to completed when all done
-        return {"status": "scoring_dispatched", "total_filtered": len(job_ids)}
+        return {"status": "completed", "total_filtered": len(job_ids)}
 
     except Exception as exc:
         log.error("mission_failed", mission_id=mission_id, error=str(exc))
@@ -312,7 +373,7 @@ def _search_exa(query: str, location: str, api_key: str) -> list:
                                    "wellfound.com", "linkedin.com", "remotive.com", "weworkremotely.com"],
                 "contents": {"text": True},
             },
-            timeout=30,
+            timeout=8,
         )
         resp.raise_for_status()
         results = resp.json().get("results", [])
@@ -373,7 +434,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
             try:
                 resp = requests.get(
                     f"https://boards-api.greenhouse.io/v1/boards/{co}/jobs?content=true",
-                    headers={"User-Agent": _UA}, timeout=10,
+                    headers={"User-Agent": _UA}, timeout=4,
                 )
                 if resp.status_code == 200:
                     for j in resp.json().get("jobs", []):
@@ -401,7 +462,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
             out = []
             try:
                 resp = requests.get(f"https://api.lever.co/v0/postings/{co}?mode=json",
-                                    headers={"User-Agent": _UA}, timeout=10)
+                                    headers={"User-Agent": _UA}, timeout=4)
                 if resp.status_code == 200:
                     for j in resp.json():
                         if _hit(j.get("text", "")):
@@ -432,7 +493,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
             try:
                 resp = requests.get(
                     f"https://api.smartrecruiters.com/v1/companies/{co}/postings?limit=100",
-                    headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=10,
+                    headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=4,
                 )
                 if resp.status_code == 200:
                     for j in resp.json().get("content", []):
@@ -476,7 +537,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
             try:
                 resp = requests.get(
                     f"https://api.ashbyhq.com/posting-api/job-board/{co}?includeCompensation=true",
-                    headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=10,
+                    headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=4,
                 )
                 if resp.status_code == 200:
                     for j in resp.json().get("jobs", []):
@@ -555,7 +616,7 @@ def _search_remoteok(query: str) -> list:
     keywords = [k for k in query.lower().split() if len(k) > 2]
     try:
         resp = requests.get("https://remoteok.com/api",
-                            headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=15)
+                            headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=6)
         if resp.status_code != 200:
             return []
         for j in resp.json():
@@ -601,7 +662,7 @@ def _search_remoteok(query: str) -> list:
     return jobs
 
 
-def _search_workable(query: str, pages: int = 2) -> list:
+def _search_workable(query: str, pages: int = 1) -> list:
     """
     Workable public US job board (aggregates all 35k+ Workable-powered companies):
       https://jobs.workable.com/api/v1/jobs?query={query}&location=united+states
@@ -615,7 +676,7 @@ def _search_workable(query: str, pages: int = 2) -> list:
             url = f"https://jobs.workable.com/api/v1/jobs?query={quote_plus(query)}&location=united+states"
             if token:
                 url += f"&pageToken={quote_plus(token)}"
-            resp = requests.get(url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=12)
+            resp = requests.get(url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=6)
             if resp.status_code != 200:
                 break
             data = resp.json()
@@ -663,7 +724,11 @@ def _search_rss(query: str) -> list:
     keywords = [k for k in query.lower().split() if len(k) > 2]
     for url in feeds:
         try:
-            feed = feedparser.parse(url)
+            resp = requests.get(url, headers={"User-Agent": _UA, "Accept": "application/rss+xml, application/xml, text/xml"},
+                                timeout=4)
+            if resp.status_code != 200:
+                continue
+            feed = feedparser.parse(resp.content)
             for entry in feed.entries[:50]:
                 title = (entry.get("title") or "").lower()
                 if keywords and not any(kw in title for kw in keywords):
@@ -825,7 +890,7 @@ def _check_one_live(job: dict) -> bool:
     if not url:
         return True
     try:
-        resp = requests.get(url, headers={"User-Agent": _UA}, timeout=8,
+        resp = requests.get(url, headers={"User-Agent": _UA}, timeout=2.5,
                             allow_redirects=True, stream=True)
         if resp.status_code in (404, 410):
             return False
