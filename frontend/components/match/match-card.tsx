@@ -243,6 +243,25 @@ export function MatchCard({ match }: MatchCardProps) {
     }
   };
 
+  // Shared success path: show the Download affordance AND auto-save the file —
+  // the user asked for the resume, so don't make them click a second time.
+  // Failures fall back to the visible Download button + inline error.
+  const completeSuccess = (url: string | null) => {
+    setResumeUrl(url);
+    setResumeState('success');
+    if (url) {
+      setDownloading(true);
+      downloadDoc(url, 'Resume.docx')
+        .catch((err) => {
+          if (mountedRef.current)
+            setResumeError(err instanceof Error ? err.message : 'Download failed');
+        })
+        .finally(() => {
+          if (mountedRef.current) setDownloading(false);
+        });
+    }
+  };
+
   const pollStatus = async (taskId: string) => {
     // Cap the loop: a task whose status can never resolve (lost ownership
     // record, evicted result) must not spin forever.
@@ -261,8 +280,7 @@ export function MatchCard({ match }: MatchCardProps) {
       const state = normalizeState(task.status);
       if (state === 'success') {
         stopPolling();
-        setResumeUrl(extractPdfUrl(task.result));
-        setResumeState('success');
+        completeSuccess(extractPdfUrl(task.result));
       } else if (state === 'failure') {
         stopPolling();
         setResumeError('Generation failed. Try again.');
@@ -308,8 +326,7 @@ export function MatchCard({ match }: MatchCardProps) {
     // The generate call may already resolve to a terminal state.
     const immediate = normalizeState(task.status);
     if (immediate === 'success') {
-      setResumeUrl(extractPdfUrl(task.result));
-      setResumeState('success');
+      completeSuccess(extractPdfUrl(task.result));
       return;
     }
     if (immediate === 'failure') {

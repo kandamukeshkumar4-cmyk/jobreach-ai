@@ -7,6 +7,7 @@ import json
 import re
 import base64
 import io
+import time
 from app.workers.celery_app import celery_app
 from app.database import get_db
 from app.config import get_settings
@@ -543,18 +544,31 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
             timeout=25.0,
         )
 
-        # Generate only the header tailoring (~200-350 tokens → ~2-4s)
-        msg = client.chat.completions.create(
-            model="meta/llama-3.1-8b-instruct",
-            max_tokens=500,
-            temperature=0.1,
-            messages=[{"role": "user", "content": TAILORING_PROMPT.format(
-                resume_markdown=resume_markdown[:1500],
-                title=job.get("title", ""),
-                company=job.get("company", ""),
-                description=(job.get("description_snippet") or "")[:800],
-            )}],
-        )
+        # Generate only the header tailoring (~200-350 tokens → ~2-4s). One
+        # bounded retry on provider throttling (429/504) keeps a busy NIM tier
+        # from failing the whole task while staying inside the ~30s UX budget.
+        def _tailor_call():
+            return client.chat.completions.create(
+                model="meta/llama-3.1-8b-instruct",
+                max_tokens=500,
+                temperature=0.1,
+                messages=[{"role": "user", "content": TAILORING_PROMPT.format(
+                    resume_markdown=resume_markdown[:1500],
+                    title=job.get("title", ""),
+                    company=job.get("company", ""),
+                    description=(job.get("description_snippet") or "")[:800],
+                )}],
+            )
+
+        try:
+            msg = _tailor_call()
+        except Exception as exc:
+            if any(m in str(exc) for m in ("429", "Too Many Requests", "504", "timeout")):
+                log.warning("resume_llm_throttled_retrying", match_id=match_id, error=str(exc)[:200])
+                time.sleep(5)
+                msg = _tailor_call()
+            else:
+                raise
 
         tailored = _extract_json(msg.choices[0].message.content)
 

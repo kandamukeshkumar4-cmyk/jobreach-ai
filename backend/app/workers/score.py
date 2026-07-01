@@ -8,6 +8,7 @@ milestones to the DB (one heartbeat row every ~8s, capped) — the per-second
 visual pulse is rendered client-side from the elapsed clock.
 """
 import json
+import random
 import threading
 import time
 import redis
@@ -26,6 +27,39 @@ log = structlog.get_logger()
 # threshold is 15s, so an 8s cadence keeps it well clear without DB spam.
 _HB_INTERVAL = 8
 _HB_MAX_PER_JOB = 8  # 64s window; after this the frontend's stall UI takes over
+
+# ── LLM rate control ──────────────────────────────────────────────────────────
+# The worker pool runs 12 threads; 12 simultaneous scoring calls trip the NIM
+# free-tier limit and the whole mission degrades into "Scoring skipped: 429"
+# (observed in prod: missions crawling for 45 min, most scores lost). Cap
+# concurrent LLM calls per worker process, and retry throttle/timeout errors
+# with a short backoff instead of dropping the job.
+_LLM_SEMAPHORE = threading.Semaphore(4)
+_LLM_RETRY_DELAYS = (4, 10)  # seconds; 2 retries max, keeps worst case ~15s/job
+_RETRYABLE_MARKERS = ("429", "Too Many Requests", "504", "timeout", "timed out")
+
+
+def _llm_score_call(client, content: str):
+    """One scoring completion, throttle-aware: bounded concurrency + backoff
+    retry on rate-limit/timeout errors. Non-retryable errors raise immediately."""
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((0,) + _LLM_RETRY_DELAYS):
+        if delay:
+            time.sleep(delay + random.uniform(0, 2))  # jitter to de-sync threads
+        try:
+            with _LLM_SEMAPHORE:
+                return client.chat.completions.create(
+                    model="meta/llama-3.3-70b-instruct",
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": content}],
+                )
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            if not any(m in msg for m in _RETRYABLE_MARKERS):
+                raise
+            last_exc = exc
+            log.warning("llm_score_throttled", attempt=attempt, error=msg[:200])
+    raise last_exc  # all retries exhausted
 
 DIMENSIONS = [
     ("cv_match",       "CV & Skills Match",         0.25),
@@ -140,21 +174,14 @@ def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
             research_str = json.dumps(research or {}, indent=2)[:1200]
 
             phase["sub"] = "llm"
-            message = client.chat.completions.create(
-                model="meta/llama-3.3-70b-instruct",
-                max_tokens=1024,
-                messages=[{
-                    "role": "user",
-                    "content": SCORE_PROMPT.format(
-                        profile=profile_str,
-                        title=role,
-                        company=company,
-                        location=job.get("location", ""),
-                        description=(job.get("description_snippet") or "")[:3000],
-                        research=research_str,
-                    ),
-                }],
-            )
+            message = _llm_score_call(client, SCORE_PROMPT.format(
+                profile=profile_str,
+                title=role,
+                company=company,
+                location=job.get("location", ""),
+                description=(job.get("description_snippet") or "")[:3000],
+                research=research_str,
+            ))
 
             raw = message.choices[0].message.content.strip()
             # Strip markdown fences if present
