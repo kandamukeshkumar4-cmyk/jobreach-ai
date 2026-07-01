@@ -5,18 +5,30 @@ from app.database import get_db
 from app.models.schemas import (
     ApplicationCreate, ApplicationUpdate, ApplicationOut, ApplicationStatus
 )
+from app.security import get_current_user_id, require_owned_match
 
 router = APIRouter()
+
+
+def _require_owned_application(db, application_id: str, user_id: str) -> dict:
+    try:
+        app = db.table("applications").select("*").eq("id", application_id).single().execute().data
+    except Exception:
+        app = None
+    if not app or app.get("user_id") != user_id:
+        raise HTTPException(404, "Application not found")
+    return app
 
 
 @router.get("/", response_model=List[ApplicationOut])
 async def list_applications(
     status: Optional[ApplicationStatus] = None,
     db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
 ):
     query = db.table("applications").select(
         "*, matches(overall_score, grade, jobs(title, company))"
-    ).order("created_at", desc=True)
+    ).eq("user_id", user_id).order("created_at", desc=True)
     if status:
         query = query.eq("status", status.value)
     result = query.execute()
@@ -24,8 +36,13 @@ async def list_applications(
 
 
 @router.post("/", response_model=ApplicationOut, status_code=201)
-async def create_application(payload: ApplicationCreate, db=Depends(get_db)):
-    # Pull match + job info to denormalise onto application row
+async def create_application(
+    payload: ApplicationCreate,
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    # Ownership: the match must belong to one of the caller's missions.
+    require_owned_match(db, payload.match_id, user_id)
     match = (
         db.table("matches")
         .select("*, jobs(title, company)")
@@ -38,6 +55,7 @@ async def create_application(payload: ApplicationCreate, db=Depends(get_db)):
 
     m = match.data
     row = {
+        "user_id": user_id,
         "match_id": payload.match_id,
         "job_title": m["jobs"]["title"],
         "company": m["jobs"]["company"],
@@ -55,12 +73,15 @@ async def update_application(
     application_id: str,
     payload: ApplicationUpdate,
     db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
 ):
+    _require_owned_application(db, application_id, user_id)
     update = payload.model_dump(exclude_none=True)
     result = (
         db.table("applications")
         .update(update)
         .eq("id", application_id)
+        .eq("user_id", user_id)
         .execute()
     )
     if not result.data:
@@ -69,13 +90,21 @@ async def update_application(
 
 
 @router.delete("/{application_id}", status_code=204)
-async def delete_application(application_id: str, db=Depends(get_db)):
-    db.table("applications").delete().eq("id", application_id).execute()
+async def delete_application(
+    application_id: str,
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    _require_owned_application(db, application_id, user_id)
+    db.table("applications").delete().eq("id", application_id).eq("user_id", user_id).execute()
 
 
 @router.get("/stats/summary")
-async def tracker_stats(db=Depends(get_db)):
-    result = db.table("applications").select("status").execute()
+async def tracker_stats(
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    result = db.table("applications").select("status").eq("user_id", user_id).execute()
     rows = result.data
     counts = {}
     for r in rows:

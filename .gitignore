@@ -53,3 +53,11 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Unrelated scratch / portfolio projects — keep OUT of the JobReach PR scope.
+# Root-anchored so tracked files like frontend/AGENTS.md are unaffected.
+/AGENTS.md
+/Portfolio-Mukesh/
+/awwwards-portfolio/
+/svelte-design/
+/output/

@@ -251,6 +251,8 @@ def run_mission(self: Task, mission_id: str):
                  meta={"stage": "complete", "strong_matches": 0, "total_scored": 0,
                        "scanned": total_scanned, "filtered": total_filtered, "verified": verified})
             _pub(r, mission_id, "ok", "Mission complete", meta={"stage": "complete"})
+            from app.security import release_mission_lock
+            release_mission_lock(r, mission_row.get("user_id"), mission_id)
             return {"status": "completed_empty", "total_filtered": 0}
 
         # ETA: scoring is the dominant phase. Seed a conservative per-job rate
@@ -280,6 +282,15 @@ def run_mission(self: Task, mission_id: str):
         db.table("missions").update({"status": "failed"}).eq("id", mission_id).execute()
         _pub(r, mission_id, "error", f"Mission failed: {exc}",
              meta={"stage": "complete", "error": str(exc)})
+        # Release the per-user concurrency lock so a failed mission doesn't block
+        # the user for the full 600s TTL.
+        try:
+            uid = (db.table("missions").select("user_id").eq("id", mission_id)
+                   .single().execute().data or {}).get("user_id")
+            from app.security import release_mission_lock
+            release_mission_lock(r, uid, mission_id)
+        except Exception:
+            pass
         raise
 
 

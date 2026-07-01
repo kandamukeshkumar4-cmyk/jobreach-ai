@@ -307,7 +307,7 @@ def _check_mission_complete(db, r, mission_id: str):
     Uses a Redis INCR counter (reset in run_mission before dispatch) instead of counting
     warn DB events, so stale events from prior runs cannot cause early completion.
     """
-    mission = db.table("missions").select("total_filtered, status").eq("id", mission_id).single().execute().data
+    mission = db.table("missions").select("total_filtered, status, user_id").eq("id", mission_id).single().execute().data
     if not mission or mission["status"] != "running":
         return
 
@@ -338,3 +338,10 @@ def _check_mission_complete(db, r, mission_id: str):
              meta={"stage": "complete", "strong_matches": strong, "total_scored": match_count,
                    "scored": match_count, "queued": total_filtered})
         _pub(r, mission_id, "ok", "Mission complete", meta={"stage": "complete"})
+
+        # Release the per-user concurrency lock so the user can start the next
+        # mission immediately (the 600s TTL is only the crash safety net). Uses
+        # compare-and-delete so a late-finishing stale mission can't drop a newer
+        # mission's lock.
+        from app.security import release_mission_lock
+        release_mission_lock(r, mission.get("user_id"), mission_id)

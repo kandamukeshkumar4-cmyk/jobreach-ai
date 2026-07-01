@@ -14,6 +14,7 @@ import type {
   ApplicationStatus,
   ApplicationUpdate,
 } from '@/lib/types';
+import { downloadDoc } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { ScoreRing } from '@/components/ui/score-ring';
 import { Spinner } from '@/components/ui/spinner';
@@ -315,17 +316,27 @@ function Field({
 }
 
 function DocLink({ href, label }: { href: string; label: string }) {
+  // Auth-gated download via fetch→blob (lib/download.ts), not a plain link.
+  const [err, setErr] = useState<string | null>(null);
+  const filename = label.toLowerCase().includes('cover') ? 'CoverLetter.docx' : 'Resume.docx';
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--card)] px-3 py-1 text-xs font-medium text-[var(--muted2)] transition-colors hover:border-[var(--border-bright)] hover:text-[var(--cyan)]"
+    <button
+      type="button"
+      title={err ?? undefined}
+      onClick={async () => {
+        setErr(null);
+        try {
+          await downloadDoc(href, filename);
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : 'Download failed');
+        }
+      }}
+      className={`inline-flex items-center gap-1.5 rounded-full border bg-[var(--card)] px-3 py-1 text-xs font-medium transition-colors hover:border-[var(--border-bright)] hover:text-[var(--cyan)] ${err ? 'border-[var(--red)]/50 text-[var(--red)]' : 'border-[var(--border)] text-[var(--muted2)]'}`}
     >
       <FileText className="h-3.5 w-3.5" />
       {label}
       <ExternalLink className="h-3 w-3" />
-    </a>
+    </button>
   );
 }
 

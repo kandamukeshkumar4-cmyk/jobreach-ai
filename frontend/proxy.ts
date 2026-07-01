@@ -43,11 +43,14 @@ export async function proxy(request: NextRequest) {
 
   // Do NOT put code between createServerClient and getUser — the session
   // refresh must run so cookies stay fresh on the response.
-  // getUser() makes a network call to validate the JWT. If Supabase is briefly
-  // unreachable we must NOT lock out an authenticated user: when the request
-  // carries an auth cookie, treat a thrown/errored getUser as "let through" —
-  // the page's client guard and the backend API still enforce auth. Only a
-  // definitive no-session (no auth cookie) gates below.
+  // DELIBERATE fail-open: getUser() makes a network call to validate the JWT.
+  // If Supabase is briefly unreachable we must NOT lock out an authenticated
+  // user, so when the request carries an auth cookie we let a thrown/errored
+  // getUser through. This is SAFE because this proxy is only a UX gate — the
+  // HARD security boundary is the backend (app/security.py:get_current_user_id
+  // verifies every data request's Bearer token with Supabase and enforces
+  // per-row ownership). A let-through here still can't read another user's data.
+  // Only a definitive no-session (no auth cookie) gates below.
   const hasAuthCookie = request.cookies
     .getAll()
     .some((c) => c.name.includes('-auth-token'));

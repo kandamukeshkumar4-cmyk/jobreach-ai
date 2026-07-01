@@ -13,8 +13,8 @@ import {
   AlertTriangle,
   Loader2,
 } from 'lucide-react';
-import { api, API_BASE } from '@/lib/api';
-import { getAccessToken } from '@/lib/supabase';
+import { api } from '@/lib/api';
+import { downloadDoc } from '@/lib/download';
 import { formatSalary } from '@/lib/format';
 import type { MatchOut, ResumeTask } from '@/lib/types';
 import { LiquidGlassCard } from '@/components/ui/liquid-glass';
@@ -196,23 +196,9 @@ export function MatchCard({ match }: MatchCardProps) {
     if (!resumeUrl || downloading) return;
     setDownloading(true);
     try {
-      const headers: Record<string, string> = {};
-      try {
-        const token = await getAccessToken();
-        if (token) headers.Authorization = `Bearer ${token}`;
-      } catch { /* no auth */ }
-      const res = await fetch(resumeUrl, { headers });
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = 'Resume.docx';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-    } catch {
-      window.open(resumeUrl, '_blank');
+      await downloadDoc(resumeUrl, 'Resume.docx');
+    } catch (err) {
+      setResumeError(err instanceof Error ? err.message : 'Download failed');
     } finally {
       setDownloading(false);
     }
