@@ -7,6 +7,7 @@ import json
 import re
 import base64
 import io
+import time
 from app.workers.celery_app import celery_app
 from app.database import get_db
 from app.config import get_settings
@@ -14,6 +15,10 @@ from openai import OpenAI
 import structlog
 
 log = structlog.get_logger()
+
+RESUME_TASK_TIME_LIMIT_SECONDS = 30
+RESUME_TASK_SOFT_LIMIT_SECONDS = 25
+LLM_TIMEOUT_SECONDS = 12
 
 # ── FAST TAILORING PROMPT ──────────────────────────────────────────────────────
 # Only generates the header section (~200-350 tokens output → ~2-4s on 8B)
@@ -91,6 +96,92 @@ def _extract_json(raw: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         return json.loads(re.sub(r",(\s*[}\]])", r"\1", text))
+
+
+def _dedupe(items: list[str], limit: int) -> list[str]:
+    seen = set()
+    out = []
+    for item in items:
+        text = re.sub(r"\s+", " ", str(item or "")).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _profile_skill_candidates(profile: dict, resume_markdown: str) -> list[str]:
+    raw = profile.get("skills") or []
+    if isinstance(raw, str):
+        skills = re.split(r"[,;\n]", raw)
+    elif isinstance(raw, list):
+        skills = [str(s) for s in raw]
+    else:
+        skills = []
+
+    known = [
+        "Python", "JavaScript", "TypeScript", "React", "Next.js", "FastAPI",
+        "Django", "Flask", "Node.js", "PostgreSQL", "Redis", "Celery",
+        "Kubernetes", "Docker", "AWS", "Azure", "GCP", "LLM", "RAG",
+        "OpenAI", "NVIDIA", "LangChain", "Evaluation", "DevOps", "SRE",
+        "CI/CD", "Terraform", "SQL", "Machine Learning",
+    ]
+    resume_text = resume_markdown.lower()
+    discovered = [skill for skill in known if skill.lower() in resume_text]
+    return _dedupe([*skills, *discovered], 24)
+
+
+def _fallback_tailoring(profile: dict, job: dict, resume_markdown: str) -> dict:
+    """Local no-LLM tailoring used when the model is slow/unavailable.
+
+    This keeps the product promise: the user gets a useful DOCX even if the LLM
+    path times out. It only reuses profile/resume facts and job keywords.
+    """
+    title = (job.get("title") or "Target Role").strip()
+    job_text = " ".join([
+        title,
+        job.get("company") or "",
+        job.get("description_snippet") or "",
+    ]).lower()
+
+    candidates = _profile_skill_candidates(profile, resume_markdown)
+    overlap = [
+        skill for skill in candidates
+        if skill.lower() in job_text or any(part and part in job_text for part in skill.lower().split())
+    ]
+    keywords = _dedupe([*overlap, *candidates], 10)
+    headline_terms = keywords[:4] or ["Execution", "Automation", "Delivery"]
+
+    role_family = title
+    if len(role_family) > 64:
+        role_family = role_family[:61].rstrip() + "..."
+
+    summary_bullets = [
+        f"Experience aligned to {role_family} responsibilities using verified background from the uploaded resume.",
+        f"Relevant strengths: {', '.join(headline_terms[:5])}.",
+        "Focuses on verified accomplishments and skills that map to this job description without unsupported claims.",
+    ]
+
+    delivery = [k for k in keywords if k.lower() in {
+        "kubernetes", "docker", "aws", "azure", "gcp", "devops", "sre",
+        "ci/cd", "terraform", "redis", "celery",
+    }]
+    engineering = [k for k in keywords if k not in delivery]
+
+    return {
+        "headline": f"{role_family} | {', '.join(headline_terms)}",
+        "summary_bullets": summary_bullets,
+        "skills": {
+            "Relevant Skills": engineering[:8] or headline_terms,
+            "Delivery": delivery[:6] or ["Execution", "Automation", "Production Systems"],
+        },
+        "keywords_injected": keywords,
+    }
 
 
 # ── MARKDOWN SECTION PARSER ────────────────────────────────────────────────────
@@ -513,10 +604,12 @@ def _build_docx(tailored: dict, candidate_name: str, profile: dict,
 # ── CELERY TASK ────────────────────────────────────────────────────────────────
 
 @celery_app.task(bind=True, queue="resume", name="app.workers.resume.generate_resume_task",
-                 time_limit=120, soft_time_limit=110)
+                 time_limit=RESUME_TASK_TIME_LIMIT_SECONDS,
+                 soft_time_limit=RESUME_TASK_SOFT_LIMIT_SECONDS)
 def generate_resume_task(self, match_id: str, include_cover_letter: bool = False, tone: str = "direct"):
     s = get_settings()
     db = get_db()
+    started = time.monotonic()
 
     try:
         match = (
@@ -540,23 +633,28 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
         client = OpenAI(
             api_key=s.nvidia_api_key,
             base_url="https://integrate.api.nvidia.com/v1",
-            timeout=25.0,
+            timeout=LLM_TIMEOUT_SECONDS,
         )
 
-        # Generate only the header tailoring (~200-350 tokens → ~2-4s)
-        msg = client.chat.completions.create(
-            model="meta/llama-3.1-8b-instruct",
-            max_tokens=500,
-            temperature=0.1,
-            messages=[{"role": "user", "content": TAILORING_PROMPT.format(
-                resume_markdown=resume_markdown[:1500],
-                title=job.get("title", ""),
-                company=job.get("company", ""),
-                description=(job.get("description_snippet") or "")[:800],
-            )}],
-        )
-
-        tailored = _extract_json(msg.choices[0].message.content)
+        used_fallback = False
+        try:
+            # Generate only the header tailoring (~200-350 tokens → ~2-4s)
+            msg = client.chat.completions.create(
+                model="meta/llama-3.1-8b-instruct",
+                max_tokens=500,
+                temperature=0.1,
+                messages=[{"role": "user", "content": TAILORING_PROMPT.format(
+                    resume_markdown=resume_markdown[:1500],
+                    title=job.get("title", ""),
+                    company=job.get("company", ""),
+                    description=(job.get("description_snippet") or "")[:800],
+                )}],
+            )
+            tailored = _extract_json(msg.choices[0].message.content)
+        except Exception as llm_exc:
+            used_fallback = True
+            log.warning("resume_llm_fallback", match_id=match_id, error=str(llm_exc))
+            tailored = _fallback_tailoring(profile, job, resume_markdown)
 
         candidate_name = profile.get("full_name", "Candidate")
         docx_bytes = _build_docx(tailored, candidate_name, profile, parsed_sections)
@@ -568,7 +666,7 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
 
         # ── COVER LETTER (optional) ──────────────────────────────────────────
         cover_letter_b64 = None
-        if include_cover_letter:
+        if include_cover_letter and not used_fallback and (time.monotonic() - started) < 18:
             try:
                 cl_msg = client.chat.completions.create(
                     model="meta/llama-3.1-8b-instruct",
@@ -633,6 +731,7 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
             "resume_id": resume_id,
             "candidate_name": candidate_name,
             "keywords_injected": tailored.get("keywords_injected", []),
+            "fallback": used_fallback,
         }
 
     except Exception as exc:

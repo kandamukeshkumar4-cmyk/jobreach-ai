@@ -21,12 +21,11 @@ router = APIRouter()
 # counter in score._check_mission_complete, but a hard-killed worker (OOM /
 # SIGKILL) never increments it, stranding the mission on 'running' forever.
 # These let a read finalize a mission whose worker clearly died.
-MISSION_MIN_AGE_SECONDS = 90        # never touch a just-started mission
-# A real mission finishes in well under 10 min; only declare death after a long
-# quiet window so a slow company-research fetch or a backlogged-but-alive worker
-# is NOT mislabelled failed. (The worker is now supervised + auto-restarting, so
-# genuine deaths are rare; this is a last-resort net, not the primary mechanism.)
-MISSION_STALL_QUIET_SECONDS = 1800  # 30 min with no event AND no new match = dead
+MISSION_MIN_AGE_SECONDS = 150       # never touch a just-started mission
+# Missions target 120s. If a row is older than this and there has been no event
+# or match progress, the worker is effectively lost from the user's point of
+# view. Keep the window above the target so slow-but-live work is not mislabelled.
+MISSION_STALL_QUIET_SECONDS = 300   # 5 min with no event AND no new match = dead
 
 
 def _redis_client():
@@ -61,6 +60,10 @@ def _finalize(db, mission: dict, update: dict, event: dict) -> dict:
     mid = mission["id"]
     db.table("missions").update(update).eq("id", mid).execute()
     db.table("mission_events").insert({"mission_id": mid, **event}).execute()
+    try:
+        release_mission_lock(_sync_redis(), mission.get("user_id"), mid)
+    except Exception:
+        pass
     return {**mission, **update}
 
 
@@ -125,6 +128,16 @@ def _reconcile_if_stalled(db, mission: dict) -> dict:
     except Exception:
         # Never let self-heal break a normal read.
         return mission
+
+
+def _reconcile_mission_list(db, rows: list[dict]) -> list[dict]:
+    """Apply the same stale-row reconciliation to the table view.
+
+    The mission detail endpoint has always self-healed stale rows, but the list
+    is where users notice old "Running" missions. Keeping this helper tiny makes
+    the contract testable without FastAPI request plumbing.
+    """
+    return [_reconcile_if_stalled(db, mission) for mission in rows]
 
 
 @router.post("/", response_model=MissionOut, status_code=201)
@@ -237,7 +250,7 @@ async def list_missions(
     else:
         q = q.eq("user_id", user_id)
     result = q.execute()
-    return result.data or []
+    return _reconcile_mission_list(db, result.data or [])
 
 
 @router.get("/{mission_id}", response_model=MissionOut)
