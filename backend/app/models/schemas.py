@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -176,6 +176,66 @@ class ResumeGenOut(BaseModel):
     pdf_url: str
     cover_letter_pdf_url: Optional[str] = None
     keywords_injected: List[str] = []
+    created_at: datetime
+
+
+# ── Answers bank ─────────────────────────────────────────────────────────────
+
+class AnswerCreate(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+    answer: str = Field(min_length=1, max_length=4000)
+    tags: List[str] = []
+
+    @field_validator("question", "answer")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be empty")
+        return v
+
+class AnswerUpdate(BaseModel):
+    question: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    answer: Optional[str] = Field(default=None, min_length=1, max_length=4000)
+    tags: Optional[List[str]] = None
+
+    @field_validator("question", "answer")
+    @classmethod
+    def _not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("must not be empty")
+        return v
+
+class AnswerMatchRequest(BaseModel):
+    question: str = Field(min_length=1)
+
+    @field_validator("question")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be empty")
+        return v
+
+class AnswerOut(BaseModel):
+    id: str
+    question: str
+    answer: str
+    tags: List[str] = []
+    times_used: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Interview prep ───────────────────────────────────────────────────────────
+
+class InterviewPrepRequest(BaseModel):
+    application_id: str
+
+class InterviewPrepOut(BaseModel):
+    id: str
+    application_id: str
+    company: Optional[str] = None
+    role: Optional[str] = None
+    content_md: str
     created_at: datetime
 
 

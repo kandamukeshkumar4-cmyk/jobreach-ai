@@ -479,6 +479,31 @@ ASHBY_COS = ["linear", "vercel", "supabase", "raycast", "ramp", "runwayml", "rep
 # SmartRecruiters company identifiers (api.smartrecruiters.com)
 SMARTRECRUITERS_COS = ["Square", "Visa", "Bosch", "McDonalds", "Twitch", "WeWork", "Equinix"]
 
+# DB-backed ATS company discovery (ats_companies table, seeded by
+# scripts/seed_ats_companies.py). 10-min module-level cache; hardcoded lists
+# above remain the fallback. Capped at 45 slugs per ATS for the mission budget.
+_ATS_SLUG_CACHE: dict = {}
+_ATS_SLUG_TTL_SECONDS = 600
+_ATS_SLUG_CAP = 45
+
+
+def _ats_company_slugs(ats: str, fallback: list) -> list:
+    now = time.monotonic()
+    cached = _ATS_SLUG_CACHE.get(ats)
+    if cached and now - cached[0] < _ATS_SLUG_TTL_SECONDS:
+        return cached[1]
+    try:
+        rows = (new_db().table("ats_companies").select("slug")
+                .eq("ats", ats).eq("active", True).execute().data) or []
+        slugs = [r["slug"] for r in rows if r.get("slug")][:_ATS_SLUG_CAP]
+        if not slugs:
+            return fallback
+        _ATS_SLUG_CACHE[ats] = (now, slugs)
+        return slugs
+    except Exception as e:
+        log.warning("ats_company_slugs_failed", ats=ats, error=str(e))
+        return fallback
+
 
 def _search_ats_feeds(query: str, location: str, sources: list) -> list:
     """
@@ -525,7 +550,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
             except Exception:
                 pass
             return out
-        jobs.extend(_parallel_flatten(_gh, GREENHOUSE_COS))
+        jobs.extend(_parallel_flatten(_gh, _ats_company_slugs("greenhouse", GREENHOUSE_COS)))
 
     # ── Lever ──
     if "lever" in sources:
@@ -552,7 +577,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
             except Exception:
                 pass
             return out
-        jobs.extend(_parallel_flatten(_lv, LEVER_COS))
+        jobs.extend(_parallel_flatten(_lv, _ats_company_slugs("lever", LEVER_COS)))
 
     # ── SmartRecruiters ──
     if "smartrecruiters" in sources:
@@ -599,7 +624,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
             except Exception:
                 pass
             return out
-        jobs.extend(_parallel_flatten(_sr, SMARTRECRUITERS_COS))
+        jobs.extend(_parallel_flatten(_sr, _ats_company_slugs("smartrecruiters", SMARTRECRUITERS_COS)))
 
     # ── Ashby ──
     if "ashby" in sources:
@@ -637,7 +662,7 @@ def _search_ats_feeds(query: str, location: str, sources: list) -> list:
             except Exception:
                 pass
             return out
-        jobs.extend(_parallel_flatten(_as, ASHBY_COS))
+        jobs.extend(_parallel_flatten(_as, _ats_company_slugs("ashby", ASHBY_COS)))
 
     return jobs
 

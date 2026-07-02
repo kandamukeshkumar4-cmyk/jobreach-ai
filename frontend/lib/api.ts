@@ -1,12 +1,17 @@
 import { getAccessToken } from '@/lib/supabase';
 import type {
+  AnswerCreate,
+  AnswerMatchResponse,
+  AnswerOut,
   ApplicationCreate,
   ApplicationOut,
   ApplicationUpdate,
+  InterviewPrepOut,
   MatchOut,
   MissionCreate,
   MissionEventOut,
   MissionOut,
+  PostingArchiveOut,
   ProfileCreate,
   ProfileOut,
   ResumeGeneratePayload,
@@ -159,5 +164,43 @@ export const api = {
       request<ProfileOut>(`/profile/${id}`, { method: 'PUT', body: payload }),
     parseResume: (file: File) =>
       uploadFile<{ text: string; filename: string }>('/profile/parse-resume/', file),
+  },
+  answers: {
+    list: () => request<AnswerOut[]>('/answers/'),
+    create: (payload: AnswerCreate) =>
+      request<AnswerOut>('/answers/', { method: 'POST', body: payload }),
+    update: (id: string, payload: AnswerCreate) =>
+      request<AnswerOut>(`/answers/${id}`, { method: 'PUT', body: payload }),
+    remove: (id: string): Promise<void> =>
+      request<void>(`/answers/${id}`, { method: 'DELETE', noContent: true }),
+    match: (question: string) =>
+      request<AnswerMatchResponse>('/answers/match', {
+        method: 'POST',
+        body: { question },
+      }),
+  },
+  interview: {
+    generate: (applicationId: string) =>
+      request<InterviewPrepOut>('/interview/prep', {
+        method: 'POST',
+        body: { application_id: applicationId },
+      }),
+    // Throws Error('404 ...') when no prep exists — callers check
+    // err.message.startsWith('404').
+    get: (applicationId: string) =>
+      request<InterviewPrepOut>(`/interview/prep/${applicationId}`),
+  },
+  archive: {
+    create: (applicationId: string) =>
+      // Trailing slash REQUIRED: the route is POST /api/v1/archive/ — without
+      // it FastAPI 307-redirects the POST, which drops the bearer cross-origin.
+      request<PostingArchiveOut>('/archive/', {
+        method: 'POST',
+        body: { application_id: applicationId },
+      }),
+    // Throws Error('404 ...') when nothing archived — callers check
+    // err.message.startsWith('404').
+    get: (applicationId: string) =>
+      request<PostingArchiveOut>(`/archive/${applicationId}`),
   },
 };

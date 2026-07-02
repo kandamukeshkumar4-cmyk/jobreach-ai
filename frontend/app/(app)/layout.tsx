@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Rocket, Target, ListChecks, FileText, User, LogOut, Plus } from 'lucide-react'
+import { LayoutDashboard, Rocket, Target, ListChecks, FileText, MessageSquareQuote, User, LogOut, Plus } from 'lucide-react'
 import { useAppStore } from './store'
 import type { ReactNode } from 'react'
 import { useState, useEffect } from 'react'
@@ -17,6 +17,7 @@ const navItems = [
   { href: '/matches', label: 'Matches', icon: Target },
   { href: '/tracker', label: 'Tracker', icon: ListChecks },
   { href: '/resumes', label: 'Resumes', icon: FileText },
+  { href: '/answers', label: 'Answers', icon: MessageSquareQuote },
   { href: '/profile', label: 'Profile', icon: User },
 ]
 
@@ -144,6 +145,7 @@ function Topbar() {
     if (path.includes('matches')) return 'Matches'
     if (path.includes('tracker')) return 'Tracker'
     if (path.includes('resumes')) return 'Resumes'
+    if (path.includes('answers')) return 'Answers'
     if (path.includes('profile')) return 'Profile'
     return 'JobReach AI'
   }

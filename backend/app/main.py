@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import structlog
 
 from app.config import get_settings
-from app.api import missions, jobs, tracker, resumes, profile, auth
+from app.api import missions, jobs, tracker, resumes, profile, auth, answers, interview, archive
 
 log = structlog.get_logger()
 
@@ -40,6 +40,9 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
     app.include_router(tracker.router, prefix="/api/v1/tracker", tags=["tracker"])
     app.include_router(resumes.router, prefix="/api/v1/resumes", tags=["resumes"])
+    app.include_router(answers.router, prefix="/api/v1/answers", tags=["answers"])
+    app.include_router(interview.router, prefix="/api/v1/interview", tags=["interview"])
+    app.include_router(archive.router, prefix="/api/v1/archive", tags=["archive"])
 
     @app.get("/health")
     async def health():

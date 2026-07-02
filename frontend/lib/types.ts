@@ -168,3 +168,56 @@ export interface ResumeTask {
   match_id?: string;
   result?: unknown;
 }
+
+// --- Answer Vault ---
+
+export interface AnswerCreate {
+  question: string;
+  answer: string;
+  tags: string[];
+}
+
+export interface AnswerOut {
+  id: string;
+  question: string;
+  answer: string;
+  tags: string[];
+  times_used: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AnswerMatch {
+  id: string;
+  question: string;
+  answer: string;
+  score: number;
+}
+
+export interface AnswerMatchResponse {
+  matches: AnswerMatch[];
+}
+
+// --- Interview prep ---
+
+export interface InterviewPrepOut {
+  id: string;
+  application_id: string;
+  // Backend may return null when the application lacks company/title.
+  company?: string | null;
+  role?: string | null;
+  content_md: string;
+  created_at: string;
+}
+
+// --- Posting archive ---
+
+export interface PostingArchiveOut {
+  id: string;
+  application_id?: string;
+  url: string;
+  title: string;
+  company?: string;
+  archived_at: string;
+  chars: number;
+}

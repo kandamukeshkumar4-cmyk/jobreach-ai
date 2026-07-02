@@ -11,7 +11,7 @@ const SUPABASE_ANON_KEY = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '').trim
 
 // Every route inside the (app) group, plus onboarding (needs a session too).
 const PROTECTED_PATHS = [
-  '/dashboard', '/missions', '/matches', '/tracker', '/resumes', '/profile', '/onboarding',
+  '/dashboard', '/missions', '/matches', '/tracker', '/resumes', '/answers', '/profile', '/onboarding',
 ];
 // Auth screens a logged-in user shouldn't sit on.
 const AUTH_PATHS = ['/login', '/signup'];
