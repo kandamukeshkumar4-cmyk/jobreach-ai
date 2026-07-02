@@ -4,8 +4,8 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from app.database import get_db
-from app.models.schemas import ResumeGenRequest
-from app.security import get_current_user_id, require_owned_match
+from app.models.schemas import ResumeDocumentOut, ResumeGenRequest
+from app.security import get_current_user_id, owned_profile_ids, require_owned_match
 from app.workers.celery_app import get_sync_redis
 
 router = APIRouter()
@@ -38,6 +38,39 @@ def _require_owned_resume(db, resume_id: str, user_id: str) -> dict:
         raise HTTPException(404, "Resume not found")
     require_owned_match(db, r["match_id"], user_id)  # 404 if not owned
     return r
+
+
+def _resume_urls(row: dict) -> dict:
+    # RELATIVE paths only — never a hardcoded prod host. The frontend joins
+    # these with its configured API base and fetches them WITH the bearer
+    # token (the download routes are auth-gated).
+    base = f"/api/v1/resumes/{row['id']}"
+    return {
+        "download_url": f"{base}/download",
+        "cover_letter_url": (
+            f"{base}/cover-letter/download"
+            if row.get("cover_letter_pdf_url") else None
+        ),
+    }
+
+
+def _owned_mission_ids(db, user_id: str) -> list[str]:
+    ids: set[str] = set()
+    rows = db.table("missions").select("id").eq("user_id", user_id).execute().data or []
+    ids.update(r["id"] for r in rows)
+
+    profiles = owned_profile_ids(db, user_id)
+    if profiles:
+        legacy_rows = (
+            db.table("missions")
+            .select("id")
+            .in_("profile_id", profiles)
+            .execute()
+            .data
+            or []
+        )
+        ids.update(r["id"] for r in legacy_rows)
+    return list(ids)
 
 
 @router.post("/generate", response_model=dict, status_code=202)
@@ -118,6 +151,53 @@ async def resume_status(task_id: str, user_id: str = Depends(get_current_user_id
     }
 
 
+@router.get("/", response_model=list[ResumeDocumentOut])
+async def list_resumes(
+    db=Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    mission_ids = _owned_mission_ids(db, user_id)
+    if not mission_ids:
+        return []
+
+    match_result = (
+        db.table("matches")
+        .select("id, mission_id, overall_score, grade, jobs(title, company)")
+        .in_("mission_id", mission_ids)
+        .execute()
+    )
+    matches = {m["id"]: m for m in (match_result.data or [])}
+    if not matches:
+        return []
+
+    resume_result = (
+        db.table("resumes")
+        .select("id, match_id, cover_letter_pdf_url, keywords_injected, created_at")
+        .in_("match_id", list(matches.keys()))
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    docs = []
+    for row in (resume_result.data or []):
+        match = matches.get(row["match_id"])
+        if not match:
+            continue
+        job = match.get("jobs") or {}
+        docs.append({
+            "id": row["id"],
+            "match_id": row["match_id"],
+            "job_title": job.get("title") or "Untitled role",
+            "company": job.get("company") or "Unknown company",
+            "overall_score": match.get("overall_score") or 0,
+            "grade": match.get("grade") or "C",
+            **_resume_urls(row),
+            "keywords_injected": row.get("keywords_injected") or [],
+            "created_at": row["created_at"],
+        })
+    return docs
+
+
 @router.get("/match/{match_id}", response_model=list)
 async def list_resumes_for_match(
     match_id: str,
@@ -135,17 +215,10 @@ async def list_resumes_for_match(
     # Don't return the raw base64 in the list — just metadata + download URL
     rows = []
     for row in (result.data or []):
-        # RELATIVE paths only — never a hardcoded prod host. The frontend joins
-        # these with its configured API base and fetches them WITH the bearer
-        # token (the download routes are auth-gated; a plain <a href> can't send
-        # the header, so the client must fetch→blob→save).
-        base = f"/api/v1/resumes/{row['id']}"
         rows.append({
             "id": row["id"],
             "match_id": row["match_id"],
-            "download_url": f"{base}/download",
-            "cover_letter_url": (f"{base}/cover-letter/download"
-                                 if row.get("cover_letter_pdf_url") else None),
+            **_resume_urls(row),
             "keywords_injected": row.get("keywords_injected", []),
             "created_at": row["created_at"],
         })

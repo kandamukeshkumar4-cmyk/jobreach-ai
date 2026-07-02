@@ -95,7 +95,9 @@ function MissionTable({
         <span>Mission</span>
         <span>Search query</span>
         <span>Status</span>
-        <span className="text-right">Matches</span>
+        <span className="text-right" title="A/B-grade strong matches">
+          Strong
+        </span>
         <span className="text-right">Created</span>
       </div>
 
@@ -155,8 +157,13 @@ function MissionRow({ mission }: { mission: MissionOut }) {
           <StatusBadge status={mission.status} />
         </span>
 
-        {/* Matches */}
-        <span className="text-right font-mono text-sm tabular-nums text-[var(--text)]">
+        {/* A/B-grade strong matches. The match board shows all scored roles. */}
+        <span
+          className="text-right font-mono text-sm tabular-nums text-[var(--text)]"
+          title={`${mission.total_matches} A/B-grade strong ${
+            mission.total_matches === 1 ? 'match' : 'matches'
+          }`}
+        >
           {mission.total_matches}
         </span>
 
@@ -190,7 +197,7 @@ function ListSkeleton() {
         <span>Mission</span>
         <span>Search query</span>
         <span>Status</span>
-        <span className="text-right">Matches</span>
+        <span className="text-right">Strong</span>
         <span className="text-right">Created</span>
       </div>
       <ul className="divide-y divide-[var(--border)]">

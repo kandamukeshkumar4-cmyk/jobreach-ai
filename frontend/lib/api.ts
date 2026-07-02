@@ -9,6 +9,7 @@ import type {
   MissionOut,
   ProfileCreate,
   ProfileOut,
+  ResumeDocumentOut,
   ResumeGeneratePayload,
   ResumeTask,
   TrackerStats,
@@ -140,6 +141,7 @@ export const api = {
     stats: () => request<TrackerStats>('/tracker/stats/summary'),
   },
   resumes: {
+    list: () => request<ResumeDocumentOut[]>('/resumes/'),
     generate: (payload: ResumeGeneratePayload) =>
       request<ResumeTask>('/resumes/generate', {
         method: 'POST',
@@ -148,7 +150,7 @@ export const api = {
     status: (taskId: string) =>
       request<ResumeTask>(`/resumes/status/${taskId}`),
     forMatch: (matchId: string) =>
-      request<unknown[]>(`/resumes/match/${matchId}`),
+      request<ResumeDocumentOut[]>(`/resumes/match/${matchId}`),
   },
   profile: {
     me: () => request<ProfileOut>('/profile/me'),

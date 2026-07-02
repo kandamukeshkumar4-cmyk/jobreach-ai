@@ -178,6 +178,18 @@ class ResumeGenOut(BaseModel):
     keywords_injected: List[str] = []
     created_at: datetime
 
+class ResumeDocumentOut(BaseModel):
+    id: str
+    match_id: str
+    job_title: str
+    company: str
+    overall_score: float
+    grade: Grade
+    download_url: str
+    cover_letter_url: Optional[str] = None
+    keywords_injected: List[str] = []
+    created_at: datetime
+
 
 # ── Generic responses ────────────────────────────────────────────────────────
 

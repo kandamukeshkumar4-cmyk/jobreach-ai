@@ -168,3 +168,16 @@ export interface ResumeTask {
   match_id?: string;
   result?: unknown;
 }
+
+export interface ResumeDocumentOut {
+  id: string;
+  match_id: string;
+  job_title?: string;
+  company?: string;
+  overall_score?: number;
+  grade?: Grade;
+  download_url: string;
+  cover_letter_url?: string | null;
+  keywords_injected: string[];
+  created_at: string;
+}
