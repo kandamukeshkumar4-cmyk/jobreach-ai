@@ -33,6 +33,12 @@ CURRENT EXPERIENCE (JSON — keep every company/title/date EXACTLY as given; rew
 bullet text to emphasize what this job asks for, reusing the facts already in each bullet):
 {experience_json}
 
+CURRENT PROJECTS (JSON — keep every project name and link EXACTLY as given; rewrite ONLY the
+bullet text. GAP-FILL RULE: if the job asks for skills the work experience does not show but a
+project DOES, emphasize that project's relevant facts prominently — never invent new projects,
+technologies, or outcomes):
+{projects_json}
+
 JOB:
 Title: {title}
 Company: {company}
@@ -54,6 +60,9 @@ Return JSON only (no markdown fences, no extra text):
   }},
   "experience_bullets": {{
     "<company name exactly as given>": ["<tailored bullet 1>", "<tailored bullet 2>", "<tailored bullet 3>", "<tailored bullet 4>"]
+  }},
+  "project_bullets": {{
+    "<project name exactly as given>": ["<tailored bullet 1>", "<tailored bullet 2>"]
   }},
   "keywords_injected": ["kw1", "kw2", "kw3", "kw4", "kw5"]
 }}"""
@@ -427,25 +436,38 @@ def _parse_projects(lines: list, out: list):
                 current['links'] = stripped
 
 
-def _merge_tailored_bullets(parsed: dict, tailored: dict) -> None:
-    """Replace each experience entry's bullets with the LLM's JD-tailored ones,
-    matched by company (case-insensitive). Companies, titles, dates, locations
-    are NEVER touched — tailoring only rewrites bullet text. Missing/empty/
-    malformed model output leaves the original bullets in place."""
-    raw = tailored.get("experience_bullets")
+def _clean_bullet_map(raw, per_key: int) -> dict:
+    """Normalize an LLM {name: [bullets]} map: whitespace-collapse, drop stubs,
+    lower-cased keys for case-insensitive matching."""
+    out = {}
     if not isinstance(raw, dict):
-        return
-    by_company = {}
+        return out
     for k, v in raw.items():
         if isinstance(v, list):
             cleaned = [re.sub(r"\s+", " ", str(b)).strip() for b in v]
             cleaned = [b for b in cleaned if len(b) > 15]  # drop stubs/junk
             if cleaned:
-                by_company[str(k).strip().lower()] = cleaned[:4]
+                out[str(k).strip().lower()] = cleaned[:per_key]
+    return out
+
+
+def _merge_tailored_bullets(parsed: dict, tailored: dict) -> None:
+    """Replace experience AND project bullets with the LLM's JD-tailored ones,
+    matched by company/project name (case-insensitive). Companies, titles,
+    dates, locations, and project links are NEVER touched — tailoring only
+    rewrites bullet text. Missing/empty/malformed model output leaves the
+    original bullets in place, so the body can never thin out."""
+    by_company = _clean_bullet_map(tailored.get("experience_bullets"), per_key=4)
     for role in parsed.get("experience", []):
         new = by_company.get((role.get("company") or "").strip().lower())
         if new:
             role["bullets"] = new
+
+    by_project = _clean_bullet_map(tailored.get("project_bullets"), per_key=3)
+    for proj in parsed.get("projects", []):
+        new = by_project.get((proj.get("name") or "").strip().lower())
+        if new:
+            proj["bullets"] = new
 
 
 # ── GITLAB LINKS ───────────────────────────────────────────────────────────────
@@ -759,17 +781,22 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
              "bullets": e.get("bullets", [])[:5]}
             for e in parsed_sections.get("experience", [])[:5]
         ], indent=0)
+        projects_json = json.dumps([
+            {"name": p.get("name", ""), "bullets": p.get("bullets", [])[:3]}
+            for p in parsed_sections.get("projects", [])[:3]
+        ], indent=0)
 
         used_fallback = False
         try:
             # Header + tailored bullets in ONE call (~600-900 tokens → ~5-8s on 8B)
             msg = client.chat.completions.create(
                 model="meta/llama-3.1-8b-instruct",
-                max_tokens=1000,
+                max_tokens=1200,
                 temperature=0.1,
                 messages=[{"role": "user", "content": TAILORING_PROMPT.format(
                     resume_markdown=resume_markdown[:1500],
                     experience_json=experience_json[:2500],
+                    projects_json=projects_json[:1500],
                     title=job.get("title", ""),
                     company=job.get("company", ""),
                     description=(job.get("description_snippet") or "")[:800],

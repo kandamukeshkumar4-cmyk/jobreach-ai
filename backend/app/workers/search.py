@@ -60,15 +60,61 @@ _CLOSED_MARKERS = (
     "this role is no longer open",
 )
 
-# Remote jobs that mention these region signals are EU/APAC-only and not US-eligible.
-# Used in _filter_jobs to avoid passing EU-restricted remote roles as "US Remote".
+# Jobs that mention these region signals are non-US and not US-eligible.
+# Used by the ALWAYS-ON US-market gate in _filter_jobs (this product serves the
+# US job market only), not just the remote-role branch.
 _NON_US_ONLY = frozenset([
     "europe", "emea", "uk", "united kingdom", "germany", "france", "spain",
     "italy", "netherlands", "sweden", "norway", "denmark", "poland", "austria",
     "switzerland", "belgium", "portugal", "canada", "australia", "new zealand",
     "india", "asia", "apac", "singapore", "latam", "latin america", "africa",
-    "middle east",
+    "middle east", "uae", "dubai", "abu dhabi", "saudi", "qatar", "israel",
+    "ireland", "finland", "estonia", "latvia", "lithuania", "romania",
+    "bulgaria", "hungary", "czech", "slovakia", "slovenia", "croatia",
+    "serbia", "ukraine", "greece", "turkey", "türkiye", "egypt", "nigeria",
+    "kenya", "brazil", "mexico", "argentina", "colombia", "chile", "peru",
+    "costa rica", "japan", "china", "korea", "hong kong", "taiwan", "vietnam",
+    "philippines", "indonesia", "malaysia", "thailand", "pakistan",
 ])
+
+# Explicit US markers that OVERRIDE a non-US token (e.g. "Remote — US or Europe"
+# is US-eligible; "Remote — Europe" is not).
+_US_SIGNALS = (
+    "united states", "usa", "u.s.", ", us", "(us", "us only", "us-based",
+    "us remote", "remote us", "north america", "americas",
+)
+
+
+def _is_us_eligible(job_loc: str) -> bool:
+    """ALWAYS-ON US-market gate. Empty/unknown locations pass (conservative —
+    liveness+scoring still vet them); any non-US region signal without an
+    explicit US marker is dropped. This runs regardless of the mission's
+    location_filter — previously a 'Remote'/empty filter skipped location
+    checks entirely and Abu Dhabi/EMEA/Singapore roles reached scoring."""
+    loc = (job_loc or "").lower()
+    if not loc.strip():
+        return True
+    # Substring markers plus a word-boundary match for a bare "US"/"U.S." token
+    # ("Remote — US or Europe" is US-eligible; "status"/"Australia" are not hits).
+    if any(us in loc for us in _US_SIGNALS) or re.search(r"\bu\.?s\.?a?\b", loc):
+        return True
+    return not any(region in loc for region in _NON_US_ONLY)
+
+
+def _resume_driven_queries(query: str, profile: dict) -> list:
+    """Personalize SOURCING, not just scoring: enrich the user's query with the
+    top skills from their profile/resume, and add their target_roles as extra
+    query variants. Previously Exa searched only the literal typed query, so
+    two users with different resumes got identical candidate pools."""
+    skills = [str(sk).strip() for sk in (profile.get("skills") or []) if str(sk).strip()]
+    skill_str = " ".join(skills[:3])
+    queries = [f"{query} {skill_str}".strip() if skill_str else query]
+    ql = query.lower().strip()
+    for role in (profile.get("target_roles") or []):
+        role = str(role).strip()
+        if role and role.lower() != ql and len(queries) < 3:
+            queries.append(f"{role} {' '.join(skills[:2])}".strip())
+    return queries
 
 
 def _score_slots_for_budget(remaining_seconds: float, per_job_seconds: float = _SCORE_RATE_SEED) -> int:
@@ -158,9 +204,21 @@ def run_mission(self: Task, mission_id: str):
         raw_jobs = []
 
         if "exa" in sources:
-            _pub(r, mission_id, "run", f"Scanning Exa semantic web search for: '{query}'...",
+            # Resume-personalized sourcing: query variants built from the
+            # profile's skills + target_roles, deduped by URL across variants.
+            exa_queries = _resume_driven_queries(query, profile)
+            _pub(r, mission_id, "run",
+                 f"Scanning Exa with {len(exa_queries)} resume-personalized queries for: '{query}'...",
                  meta={"stage": "search", "provider": "exa", "source": "exa"})
-            exa_jobs = _search_exa(query, location, s.exa_api_key)
+            exa_jobs, _seen_exa = [], set()
+            for exa_q in exa_queries:
+                for j in _search_exa(exa_q, location, s.exa_api_key):
+                    u = (j.get("url") or "").strip()
+                    if u and u in _seen_exa:
+                        continue
+                    if u:
+                        _seen_exa.add(u)
+                    exa_jobs.append(j)
             raw_jobs.extend(exa_jobs)
             _pub(r, mission_id, "ok", f"Exa returned {len(exa_jobs)} postings",
                  meta={"stage": "search", "provider": "exa", "source": "exa", "count": len(exa_jobs),
@@ -213,6 +271,17 @@ def run_mission(self: Task, mission_id: str):
         total_scanned = len(raw_jobs)
         _pub(r, mission_id, "ok", f"Scanned {total_scanned:,} postings across {len(sources)} sources",
              meta={"stage": "search", "scanned": total_scanned, "total_scanned": total_scanned})
+
+        # Cross-source dedup (career-ops role-matcher rule): the same opening
+        # often appears via Exa AND an ATS feed AND a board — collapse exact-URL
+        # repeats and same-company fuzzy-title repeats so one real opening is
+        # researched/scored once, not four times.
+        before_dedupe = len(raw_jobs)
+        raw_jobs = _dedupe_jobs(raw_jobs)
+        if before_dedupe - len(raw_jobs) > 0:
+            _pub(r, mission_id, "ok",
+                 f"Removed {before_dedupe - len(raw_jobs)} duplicate postings across sources",
+                 meta={"stage": "filter", "deduped": before_dedupe - len(raw_jobs)})
 
         # ── DEDUPLICATE ───────────────────────────────────────────────────────
         seen_urls = set()
@@ -360,7 +429,9 @@ def _search_exa(query: str, location: str, api_key: str) -> list:
     if not api_key:
         return []
     try:
-        full_query = f"{query} job posting {location}".strip()
+        # US market only — anchor the semantic search to the US when the user
+        # didn't give a narrower location.
+        full_query = f"{query} job posting {location or 'United States'}".strip()
         resp = requests.post(
             "https://api.exa.ai/search",
             headers={"x-api-key": api_key, "Content-Type": "application/json"},
@@ -837,6 +908,32 @@ def _interleave_by_source(jobs: list) -> list:
     return result
 
 
+def _dedupe_jobs(jobs: list) -> list:
+    """Cross-source dedup: exact-URL repeats first, then same-company
+    fuzzy-similar titles (app.services.trust.titles_match, the career-ops
+    role-matcher rule). First occurrence wins, source order is preserved."""
+    from app.services.trust import titles_match
+    seen_urls = set()
+    titles_by_company: dict = {}
+    kept = []
+    for j in jobs:
+        url = (j.get("url") or "").strip().lower()
+        if url and url in seen_urls:
+            continue
+        company = (j.get("company") or "").strip().lower()
+        title = (j.get("title") or "").strip()
+        if company and title and any(
+            titles_match(prev, title) for prev in titles_by_company.get(company, ())
+        ):
+            continue
+        if url:
+            seen_urls.add(url)
+        if company and title:
+            titles_by_company.setdefault(company, []).append(title)
+        kept.append(j)
+    return kept
+
+
 def _filter_jobs(jobs: list, profile: dict, location: str, salary_min: int) -> list:
     """
     Keyword + location + conservative-salary pre-filter before expensive LLM scoring.
@@ -854,14 +951,15 @@ def _filter_jobs(jobs: list, profile: dict, location: str, salary_min: int) -> l
         title = (j.get("title") or "").lower()
         job_loc = (j.get("location") or "").lower()
 
-        # Location filter
+        # US-market gate — ALWAYS on, regardless of the mission's location
+        # filter. (The old branch skipped location checks entirely when the
+        # filter was empty/'remote', letting EMEA/APAC/Middle-East roles through.)
+        if not _is_us_eligible(job_loc):
+            continue
+
+        # Narrower user-requested location (e.g. a specific city/state).
         if loc_lower and loc_lower not in ("any", "remote"):
-            if "remote" in job_loc:
-                # Remote role: pass unless it explicitly restricts to a non-US region
-                # (e.g. "Remote, Europe" from Ashby EU-only postings).
-                if any(region in job_loc for region in _NON_US_ONLY):
-                    continue
-            elif loc_lower not in job_loc:
+            if "remote" not in job_loc and loc_lower not in job_loc:
                 continue
 
         # Title relevance: at least one keyword from target_roles
