@@ -17,13 +17,12 @@ import {
 import { api } from '@/lib/api';
 import { downloadDoc } from '@/lib/download';
 import { relativeTime } from '@/lib/format';
-import type { ApplicationOut } from '@/lib/types';
+import type { ResumeDocumentOut } from '@/lib/types';
 import { GradeBadge } from '@/components/ui/grade-badge';
 import { AgentOrb } from '@/components/ui/agent-orb';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/ui/error-state';
 import { Skeleton } from '@/components/ui/skeleton';
-import { TRACKER_KEY } from '@/components/tracker/constants';
 
 // ── Pipeline steps ────────────────────────────────────────────────────────────
 
@@ -75,40 +74,28 @@ function companyColor(name: string): string {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-interface ResumeDoc {
-  application: ApplicationOut;
-  resumeUrl?: string;
-  coverLetterUrl?: string;
-}
-
 export default function ResumesPage() {
-  const { data, isLoading, isError, refetch, isFetching } = useQuery<ApplicationOut[]>({
-    queryKey: TRACKER_KEY,
-    queryFn: () => api.tracker.list(),
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<ResumeDocumentOut[]>({
+    queryKey: ['resumes'],
+    queryFn: () => api.resumes.list(),
     // Poll while focused so freshly-tailored resumes appear; React Query already
     // pauses the interval when the tab is backgrounded.
     refetchInterval: 15_000,
   });
 
-  const docs: ResumeDoc[] = useMemo(
+  const docs: ResumeDocumentOut[] = useMemo(
     () =>
       (data ?? [])
-        .filter((a) => Boolean(a.resume_pdf_url) || Boolean(a.cover_letter_pdf_url))
-        .map((application) => ({
-          application,
-          resumeUrl: application.resume_pdf_url ?? undefined,
-          coverLetterUrl: application.cover_letter_pdf_url ?? undefined,
-        }))
         .sort(
           (a, b) =>
-            new Date(b.application.applied_at ?? b.application.created_at).getTime() -
-            new Date(a.application.applied_at ?? a.application.created_at).getTime(),
+            new Date(b.created_at).getTime() -
+            new Date(a.created_at).getTime(),
         ),
     [data],
   );
 
   const coverLetterCount = useMemo(
-    () => docs.filter((d) => Boolean(d.coverLetterUrl)).length,
+    () => docs.filter((d) => Boolean(d.cover_letter_url)).length,
     [docs],
   );
 
@@ -213,7 +200,7 @@ export default function ResumesPage() {
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {docs.map((doc) => (
-              <ResumeCard key={doc.application.id} doc={doc} />
+              <ResumeCard key={doc.id} doc={doc} />
             ))}
           </div>
         )}
@@ -224,10 +211,13 @@ export default function ResumesPage() {
 
 // ── Document card ─────────────────────────────────────────────────────────────
 
-function ResumeCard({ doc }: { doc: ResumeDoc }) {
-  const { application, resumeUrl, coverLetterUrl } = doc;
-  const color = companyColor(application.company || 'Z');
-  const initial = (application.company || '?')[0].toUpperCase();
+function ResumeCard({ doc }: { doc: ResumeDocumentOut }) {
+  const resumeUrl = doc.download_url;
+  const coverLetterUrl = doc.cover_letter_url ?? undefined;
+  const company = doc.company || 'Unknown company';
+  const title = doc.job_title || 'Untitled role';
+  const color = companyColor(company);
+  const initial = company[0].toUpperCase();
 
   // Downloads go through an auth-bearing fetch (the routes are token-gated), not
   // a plain link — see lib/download.ts.
@@ -257,13 +247,13 @@ function ResumeCard({ doc }: { doc: ResumeDoc }) {
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-[13px] font-semibold text-[var(--text)]">
-              {application.job_title || 'Untitled role'}
+              {title}
             </p>
             <p className="truncate text-[11px] text-[var(--muted)]">
-              {application.company || 'Unknown company'}
+              {company}
             </p>
           </div>
-          <GradeBadge grade={application.grade} score={application.overall_score} />
+          <GradeBadge grade={doc.grade ?? 'C'} score={doc.overall_score ?? 0} />
         </div>
 
         {/* Divider */}
@@ -306,7 +296,7 @@ function ResumeCard({ doc }: { doc: ResumeDoc }) {
 
         {/* Footer */}
         <p className="text-[11px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>
-          Tailored {relativeTime(application.applied_at ?? application.created_at)}
+          Tailored {relativeTime(doc.created_at)}
         </p>
       </div>
     </div>
