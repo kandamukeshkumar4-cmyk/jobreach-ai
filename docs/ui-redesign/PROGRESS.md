@@ -4,10 +4,11 @@ Loop protocol state file. Read at the start of every iteration, written at the e
 
 ## Status
 
-**All 9 real `(app)` tabs are redesigned, polished dark-SaaS, and wired to real APIs.** Build, eslint (changed files), and backend compile are green. The code work is complete; the only unresolved item is populated screenshots of the auth-gated tabs (blocked — see Blockers).
+**PR #6 (`feat/mission-saas-redesign`) contains the mission-running SaaS v2 redesign plus route-wiring verification evidence.** It has been reviewed against current `github/main` after the one-mission/resume-speed work, so the UI change is evaluated with the latest backend SLA guardrails present. Build, eslint (changed files), and backend compile are green. The only unresolved evidence item is populated screenshots of the auth-gated tabs (blocked — see Blockers).
 
-- Branch: `feat/mission-anti-stall-pulse` (uncommitted working-tree changes: `mission-feed.tsx` v2 + `globals.css` pulse keyframes; all other tabs already committed at HEAD).
-- HEAD: `1cb3cef` on `github/main`.
+- PR branch: `feat/mission-saas-redesign`.
+- PR commit: `4fbd874` (`feat(mission): SaaS product redesign + redesign verification docs`).
+- Current base verified against: `github/main` after PR #5 (`fix(missions): block second mission with visible banner`).
 
 ## Route-by-route wiring (Discovery + checker)
 
@@ -40,7 +41,7 @@ In `docs/ui-redesign/screenshots/`:
 | `mission-done-mobile.png` | same | 390 @ 2× | complete |
 | `login-desktop.png` | `/login` | 1440 | auth-gate boundary (what `(app)` tabs redirect to without a session) |
 
-> Note: I cannot view images (no image input). Files are for the user to open.
+> Note: the mission screenshots use `/mockups/mission-console`, which renders the production `MissionFeed` component with seeded stream data so the visual state can be verified without an authenticated production session.
 
 ## Verification commands run
 

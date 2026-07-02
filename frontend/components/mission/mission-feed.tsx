@@ -99,6 +99,11 @@ const PIPELINE: ReadonlyArray<{ key: string; label: string; test: RegExp }> = [
 const STAGE_INDEX: Record<string, number> = { init: -1, search: 0, boards: 1, filter: 2, verify: 3, score: 4, complete: 5 };
 interface StageInfo { key: string; label: string; state: StageState }
 
+function pipelineKeyAt(index: number): string {
+  if (index < 0) return 'search';
+  return PIPELINE[Math.min(index, PIPELINE.length - 1)]?.key ?? 'search';
+}
+
 function computeStages(events: MissionEventOut[], done: boolean, failed: boolean) {
   let metaIdx = -1, regexIdx = -1;
   const haystacks = events.map((e) => `${cleanHtml(e.message)} ${cleanHtml(e.detail)}`.toLowerCase());
@@ -259,7 +264,13 @@ function useCountUp(target?: number): number {
     if (target == null) return;
     const from = fromRef.current;
     if (from === target) return;
-    if (reduceMotion()) { setVal(target); fromRef.current = target; return; }
+    if (reduceMotion()) {
+      const t = setTimeout(() => {
+        setVal(target);
+        fromRef.current = target;
+      }, 0);
+      return () => clearTimeout(t);
+    }
     const steps = 24;
     let i = 0;
     const id = setInterval(() => {
@@ -285,10 +296,13 @@ function useRotatingHint(phaseKey: string | undefined, live: boolean): string {
   const hints = (phaseKey && PHASE_HINTS[phaseKey]) || PHASE_HINTS.search;
   const [idx, setIdx] = useState(0);
   useEffect(() => {
-    setIdx(0);
-    if (!live || reduceMotion()) return;
+    const reset = setTimeout(() => setIdx(0), 0);
+    if (!live || reduceMotion()) return () => clearTimeout(reset);
     const t = setInterval(() => setIdx((i) => i + 1), 2400);
-    return () => clearInterval(t);
+    return () => {
+      clearTimeout(reset);
+      clearInterval(t);
+    };
   }, [phaseKey, live]);
   return hints[idx % hints.length];
 }
@@ -351,17 +365,17 @@ function StatusHeader({ meta, title, fillPct, failed, done, elapsedSec, etaSec, 
   elapsedSec: number; etaSec: number | null; silenceSec: number; eventCount: number;
 }) {
   return (
-    <header className="flex flex-wrap items-center gap-x-5 gap-y-3 px-6 py-5">
+    <header className="grid gap-3 px-4 py-4 sm:flex sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-3 sm:px-6 sm:py-5">
       <span className="flex items-center gap-2.5">
         <span className="flex items-center gap-2 rounded-full px-3 py-1.5" style={{ background: 'color-mix(in srgb, ' + meta.tone + ' 14%, transparent)', border: '1px solid color-mix(in srgb, ' + meta.tone + ' 35%, transparent)' }}>
           {meta.live ? <PulsingDot color={meta.tone} /> : <span className="h-2 w-2 rounded-full" style={{ backgroundColor: meta.tone }} />}
           <span className="text-[12px] font-semibold tracking-[0.4px]" style={{ color: meta.tone }}>{done ? 'Complete' : failed ? 'Failed' : meta.label}</span>
         </span>
       </span>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 sm:flex-1">
         <h2 className="truncate text-[17px] font-semibold tracking-[-0.3px] text-[var(--text)]" style={{ fontFamily: 'var(--font-display)' }}>{title}</h2>
       </div>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-right">
+      <div className="grid min-w-0 grid-cols-2 gap-x-5 gap-y-2 sm:flex sm:flex-wrap sm:items-center sm:gap-y-1.5 sm:text-right">
         <Metric label="Elapsed" value={fmtDuration(elapsedSec)} tone="var(--text)" />
         {etaSec != null && !done && !failed && <Metric label="ETA" value={fmtDuration(etaSec)} tone="var(--cyan)" />}
         <Metric label="Updated" value={fmtAgo(silenceSec)} tone={silenceSec > 15 ? 'var(--amber)' : 'var(--muted2)'} />
@@ -375,7 +389,7 @@ function StatusHeader({ meta, title, fillPct, failed, done, elapsedSec, etaSec, 
 }
 function Metric({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
-    <span className="flex flex-col items-end leading-tight">
+    <span className="flex flex-col items-start leading-tight sm:items-end">
       <span className="text-[9px] uppercase tracking-[1.4px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>{label}</span>
       <span className="text-[14px] font-semibold tabular-nums" style={{ color: tone, fontFamily: 'var(--font-mono)' }}>{value}</span>
     </span>
@@ -387,7 +401,7 @@ function Metric({ label, value, tone }: { label: string; value: string; tone: st
 function StallBanner({ silenceSec, elapsedSec, phaseKey, onRefresh }: { silenceSec: number; elapsedSec: number; phaseKey: string | undefined; onRefresh?: () => void; }) {
   if (silenceSec >= 60) {
     return (
-      <div role="alert" aria-live="assertive" className="mx-6 mb-4 flex items-start gap-3 rounded-xl border px-4 py-3" style={{ borderColor: 'color-mix(in srgb, var(--amber) 40%, var(--border))', background: 'color-mix(in srgb, var(--amber) 8%, var(--surface))' }}>
+      <div role="alert" aria-live="assertive" className="mx-4 mb-4 flex items-start gap-3 rounded-xl border px-4 py-3 sm:mx-6" style={{ borderColor: 'color-mix(in srgb, var(--amber) 40%, var(--border))', background: 'color-mix(in srgb, var(--amber) 8%, var(--surface))' }}>
         <span className="mt-0.5"><PulsingDot color="var(--amber)" /></span>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium text-[var(--text)]">Possible stall — no update for {fmtDuration(silenceSec)}.</p>
@@ -400,7 +414,7 @@ function StallBanner({ silenceSec, elapsedSec, phaseKey, onRefresh }: { silenceS
   if (silenceSec >= 15) {
     const reason = phaseKey === 'score' ? 'Deep research reads funding, culture & news per company — each role can take 10–30s to score.' : phaseKey === 'verify' ? 'Liveness checks open each posting URL; a few slow hosts can stall the batch.' : 'Provider APIs can take a while to respond.';
     return (
-      <div role="status" aria-live="polite" className="mx-6 mb-4 flex items-start gap-3 rounded-xl border border-[var(--border)] px-4 py-3" style={{ background: 'color-mix(in srgb, var(--cyan) 5%, var(--surface))' }}>
+      <div role="status" aria-live="polite" className="mx-4 mb-4 flex items-start gap-3 rounded-xl border border-[var(--border)] px-4 py-3 sm:mx-6" style={{ background: 'color-mix(in srgb, var(--cyan) 5%, var(--surface))' }}>
         <span className="mt-0.5"><PulsingDot /></span>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium text-[var(--text)]">Still working — waiting for a backend update… ({fmtDuration(silenceSec)} since last event)</p>
@@ -417,7 +431,7 @@ function StallBanner({ silenceSec, elapsedSec, phaseKey, onRefresh }: { silenceS
 function CurrentStepCard({ stage, action, hint, live, failed, done }: { stage: string; action: string; hint: string; live: boolean; failed: boolean; done: boolean }) {
   const tone = failed ? 'var(--red)' : done ? 'var(--green)' : 'var(--cyan)';
   return (
-    <section className={cn('mx-6 mb-4 rounded-2xl border p-5', live && 'agent-breathe')} style={{ borderColor: live ? 'color-mix(in srgb, ' + tone + ' 38%, var(--border))' : 'var(--border)', background: 'linear-gradient(180deg, color-mix(in srgb, ' + tone + ' 6%, var(--card)), var(--card))' }}>
+    <section className={cn('mx-4 mb-4 rounded-2xl border p-5 sm:mx-6', live && 'agent-breathe')} style={{ borderColor: live ? 'color-mix(in srgb, ' + tone + ' 38%, var(--border))' : 'var(--border)', background: 'linear-gradient(180deg, color-mix(in srgb, ' + tone + ' 6%, var(--card)), var(--card))' }}>
       <div className="flex items-center gap-5">
         <AgentPulse size={64} tone={tone} active={live && !done} stage={stage} />
         <div className="min-w-0 flex-1">
@@ -425,7 +439,7 @@ function CurrentStepCard({ stage, action, hint, live, failed, done }: { stage: s
             <span className="text-[11px] font-semibold uppercase tracking-[1.8px]" style={{ color: tone, fontFamily: 'var(--font-mono)' }}>{done ? 'Done' : failed ? 'Stopped' : 'Now'}</span>
             <span className="text-[11px] uppercase tracking-[1.4px] text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>· {stage}</span>
           </div>
-          <p className="mt-1 truncate text-[20px] font-semibold leading-tight tracking-[-0.3px] text-[var(--text)]" style={{ fontFamily: 'var(--font-display)' }}>{action}</p>
+          <p className="mt-1 break-words text-[18px] font-semibold leading-tight tracking-[-0.3px] text-[var(--text)] sm:text-[20px]" style={{ fontFamily: 'var(--font-display)' }}>{action}</p>
           {live && <p className="mt-1 text-[13px] italic text-[var(--muted2)]">{hint}<span className="mission-cursor ml-1 inline-block h-[13px] w-[5px] translate-y-[2px] bg-[var(--cyan)]" /></p>}
         </div>
       </div>
@@ -437,9 +451,9 @@ function CurrentStepCard({ stage, action, hint, live, failed, done }: { stage: s
 
 function PipelineTimeline({ stages, done }: { stages: StageInfo[]; done: boolean }) {
   return (
-    <section className="mx-6 mb-4">
+    <section className="mx-4 mb-4 sm:mx-6">
       <SectionLabel>Pipeline</SectionLabel>
-      <ol className="grid grid-cols-5 gap-2" role="progressbar" aria-valuemin={0} aria-valuemax={stages.length} aria-valuenow={stages.filter((s) => s.state === 'done').length} aria-label="Mission pipeline">
+      <ol className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="progressbar" aria-valuemin={0} aria-valuemax={stages.length} aria-valuenow={stages.filter((s) => s.state === 'done').length} aria-label="Mission pipeline">
         {stages.map((s) => {
           const active = s.state === 'active' && !done;
           const tone = s.state === 'done' ? 'var(--green)' : active ? 'var(--cyan)' : 'var(--subtle)';
@@ -463,12 +477,12 @@ function PipelineTimeline({ stages, done }: { stages: StageInfo[]; done: boolean
 function ProviderGrid({ sources }: { sources: SourceRow[] }) {
   const total = sources.reduce((acc, s) => acc + (s.count ?? 0), 0);
   return (
-    <section className="mx-6 mb-4">
-      <div className="mb-2 flex items-baseline justify-between">
+    <section className="mx-4 mb-4 sm:mx-6">
+      <div className="mb-2 grid gap-1 sm:flex sm:items-baseline sm:justify-between">
         <SectionLabel>Providers</SectionLabel>
         <span className="text-[11px] tabular-nums text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>{total.toLocaleString('en-US')} postings</span>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {sources.map((s) => (
           <div key={s.key} className={cn('flex items-center gap-2.5 rounded-xl border px-3 py-2.5', s.status === 'done' ? 'border-[var(--border-bright)] bg-[var(--card)]' : 'border-[var(--border)] bg-[color-mix(in_srgb,var(--card)_60%,transparent)]')}>
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: s.status === 'pending' ? 'var(--surface3)' : 'color-mix(in srgb, ' + s.color + ' 16%, transparent)', color: s.color }}>
@@ -494,7 +508,7 @@ function ScoringSection({ scoring, live, etaSec }: { scoring: ScoringInfo; live:
   const active = live && count < total;
   const R = 26, C = 2 * Math.PI * R, off = C * (1 - Math.max(pct, 3) / 100);
   return (
-    <section className="mx-6 mb-4 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+    <section className="mx-4 mb-4 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 sm:mx-6">
       <div className="flex items-center gap-5">
         <div className="relative h-[64px] w-[64px] shrink-0">
           <svg viewBox="0 0 64 64" className="h-full w-full -rotate-90">
@@ -519,7 +533,7 @@ function ScoringSection({ scoring, live, etaSec }: { scoring: ScoringInfo; live:
         </div>
       </div>
       {recent.length > 0 && (
-        <div className="mt-4 grid gap-1.5 sm:grid-cols-2">
+        <div className="mt-4 grid gap-1.5 lg:grid-cols-2">
           {recent.map((row, i) => {
             const strong = row.grade === 'A' || row.grade === 'B';
             return (
@@ -549,9 +563,9 @@ function MatchCounters({ counters }: { counters: Counters }) {
     { label: 'Strong', value: counters.strong, color: 'var(--green)', stage: 'score' },
   ];
   return (
-    <section className="mx-6 mb-4">
+    <section className="mx-4 mb-4 sm:mx-6">
       <SectionLabel>Discovery</SectionLabel>
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {cells.map((c) => <StatCard key={c.label} label={c.label} value={c.value} color={c.color} stage={c.stage} />)}
       </div>
     </section>
@@ -574,8 +588,8 @@ function StatCard({ label, value, color, stage }: { label: string; value?: numbe
 function TopMatches({ matches, done }: { matches: ParsedMatch[]; done: boolean }) {
   if (matches.length === 0) return null;
   return (
-    <section className="mx-6 mb-4">
-      <div className="mb-2 flex items-baseline justify-between"><SectionLabel>Matches surfaced</SectionLabel><span className="text-[11px] tabular-nums text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>{matches.length} found</span></div>
+    <section className="mx-4 mb-4 sm:mx-6">
+      <div className="mb-2 grid gap-1 sm:flex sm:items-baseline sm:justify-between"><SectionLabel>Matches surfaced</SectionLabel><span className="text-[11px] tabular-nums text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>{matches.length} found</span></div>
       <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
         {matches.slice(-6).reverse().map((match, i) => <MatchCard key={`${match.company}-${match.role}-${i}`} match={match} isNew={i < 2 && !done} />)}
       </div>
@@ -598,13 +612,13 @@ function MatchCard({ match, isNew }: { match: ParsedMatch; isNew: boolean }) {
 function CompletionSummary({ counters, elapsedSec, matches }: { counters: Counters; elapsedSec: number; matches: ParsedMatch[] }) {
   const top3 = [...matches].sort((a, b) => b.scoreNum - a.scoreNum).slice(0, 3);
   return (
-    <section className="mx-6 mb-4 rounded-2xl border p-5" style={{ borderColor: 'color-mix(in srgb, var(--green) 35%, var(--border))', background: 'linear-gradient(180deg, color-mix(in srgb, var(--green) 7%, var(--card)), var(--card))' }} role="status" aria-live="polite">
-      <div className="mb-4 flex items-center gap-3">
+    <section className="mx-4 mb-4 rounded-2xl border p-4 sm:mx-6 sm:p-5" style={{ borderColor: 'color-mix(in srgb, var(--green) 35%, var(--border))', background: 'linear-gradient(180deg, color-mix(in srgb, var(--green) 7%, var(--card)), var(--card))' }} role="status" aria-live="polite">
+      <div className="mb-4 grid gap-3 sm:flex sm:items-center">
         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--green)]"><CheckIcon className="h-5 w-5 text-[var(--bg)]" /></span>
         <div><p className="text-[16px] font-semibold tracking-[-0.2px] text-[var(--text)]" style={{ fontFamily: 'var(--font-display)' }}>Mission complete</p><p className="text-[12px] text-[var(--muted2)]">{counters.strong ?? 0} strong matches from {counters.scored ?? 0} scored roles</p></div>
-        <span className="ml-auto text-[12px] tabular-nums text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>{fmtDuration(elapsedSec)}</span>
+        <span className="text-[12px] tabular-nums text-[var(--muted)] sm:ml-auto" style={{ fontFamily: 'var(--font-mono)' }}>{fmtDuration(elapsedSec)}</span>
       </div>
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {[
           { l: 'Scanned', v: counters.scanned, c: 'var(--cyan)' }, { l: 'Filtered', v: counters.filtered, c: 'var(--blue)' },
           { l: 'Verified', v: counters.verified, c: 'var(--green)' }, { l: 'Pruned', v: counters.pruned, c: 'var(--amber)' },
@@ -623,8 +637,8 @@ function CompletionSummary({ counters, elapsedSec, matches }: { counters: Counte
             {top3.map((m, i) => (
               <div key={`${m.company}-${m.role}-${i}`} className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
                 <span className="text-[11px] font-semibold tabular-nums text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)' }}>#{i + 1}</span>
-                <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--text)]">{m.role}<span className="text-[var(--muted)]"> @ {m.company}</span></span>
                 <span className="shrink-0 text-[13px] font-semibold tabular-nums" style={{ color: scoreColorOf(m.scoreNum), fontFamily: 'var(--font-mono)' }}>{m.score}</span>
+                <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--text)]">{m.role}<span className="text-[var(--muted)]"> @ {m.company}</span></span>
               </div>
             ))}
           </div>
@@ -638,7 +652,7 @@ function CompletionSummary({ counters, elapsedSec, matches }: { counters: Counte
 
 function FailedState({ onRefresh }: { onRefresh?: () => void }) {
   return (
-    <section className="mx-6 mb-4 flex items-start gap-3 rounded-2xl border p-5" style={{ borderColor: 'color-mix(in srgb, var(--red) 38%, var(--border))', background: 'color-mix(in srgb, var(--red) 7%, var(--card))' }} role="alert">
+    <section className="mx-4 mb-4 flex items-start gap-3 rounded-2xl border p-5 sm:mx-6" style={{ borderColor: 'color-mix(in srgb, var(--red) 38%, var(--border))', background: 'color-mix(in srgb, var(--red) 7%, var(--card))' }} role="alert">
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ background: 'color-mix(in srgb, var(--red) 18%, transparent)', color: 'var(--red)' }}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5"><path d="M12 3 2 20h20L12 3Z" /><path d="M12 10v4" /><path d="M12 17h.01" /></svg>
       </span>
@@ -690,7 +704,7 @@ function RawLog({ events, done }: { events: MissionEventOut[]; done: boolean }) 
     if (grew && pinnedRef.current) scrollToBottom(first ? 'auto' : 'smooth');
   }, [events.length, open]);
   return (
-    <section className="mx-6 mb-2">
+    <section className="mx-4 mb-2 sm:mx-6">
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-2.5 text-left transition-colors hover:border-[var(--border-bright)]">
         <svg viewBox="0 0 12 12" className={cn('h-3 w-3 text-[var(--muted)] transition-transform', open && 'rotate-90')} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 2.5 8 6l-4 3.5" /></svg>
         <span className="text-[11px] font-semibold uppercase tracking-[1.4px] text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>Activity log</span>
@@ -746,7 +760,7 @@ export function MissionFeed({ events, status, mission, missionTitle, lastEventAt
 
   const { stages, reachedIdx, fillPct } = useMemo(() => computeStages(events, done, failed), [events, done, failed]);
   const activeStage = stages.find((s) => s.state === 'active');
-  const phaseKey = activeStage?.key ?? (reachedIdx >= 0 ? PIPELINE[reachedIdx].key : 'search');
+  const phaseKey = activeStage?.key ?? pipelineKeyAt(reachedIdx);
 
   const rawSources = (mission as unknown as { sources?: unknown } | undefined)?.sources;
   const missionSources = useMemo<string[]>(() => { if (Array.isArray(rawSources)) return rawSources.map((s) => String(s)); if (typeof rawSources === 'string') return rawSources.split(','); return []; }, [rawSources]);
@@ -755,15 +769,15 @@ export function MissionFeed({ events, status, mission, missionTitle, lastEventAt
   const matches = useMemo(() => events.filter((e) => e.event_type === 'star').map(parseMatch).filter(Boolean) as ParsedMatch[], [events]);
   const counters = useMemo(() => deriveCounters(events, mission, scoring.count), [events, mission, scoring.count]);
 
-  const currentAction = useMemo(() => {
-    const last = events.at(-1);
+  const last = events.at(-1);
+  const currentAction = (() => {
     if (last && String(metaOf(last).kind ?? '') === 'heartbeat') return cleanHtml(last.message);
     for (let i = events.length - 1; i >= 0; i--) if (events[i].event_type === 'run') return cleanHtml(events[i].message);
     return last ? cleanHtml(last.message) : 'Starting the agent…';
-  }, [events]);
+  })();
   const hint = useRotatingHint(phaseKey, live);
 
-  const startMs = useMemo(() => { if (mission?.started_at) return new Date(mission.started_at).getTime(); if (events[0]?.created_at) return new Date(events[0].created_at).getTime(); return null; }, [mission?.started_at, events]);
+  const startMs = mission?.started_at ? new Date(mission.started_at).getTime() : events[0]?.created_at ? new Date(events[0].created_at).getTime() : null;
   const endMs = mission?.completed_at ? new Date(mission.completed_at).getTime() : null;
   const refMs = !live && endMs ? endMs : nowMs;
   const elapsedSec = startMs != null ? Math.max(0, (refMs - startMs) / 1000) : 0;
@@ -779,11 +793,11 @@ export function MissionFeed({ events, status, mission, missionTitle, lastEventAt
   const etaSec = backendEta ?? clientEta;
   const silenceSec = lastEventAt != null && live ? Math.max(0, (nowMs - lastEventAt) / 1000) : 0;
 
-  const showScoring = scoring.total > 0 || (phaseKey === 'score' && reachedIdx >= 4);
+  const showScoring = !done && (scoring.total > 0 || (phaseKey === 'score' && reachedIdx >= 4));
   const displayTitle = missionTitle ?? 'Job Search Agent';
 
   return (
-    <div className="mission-console overflow-hidden rounded-2xl border border-[var(--border-bright)] bg-[var(--surface)] shadow-[0_24px_100px_rgba(0,0,0,0.34)]" aria-busy={connecting || (live && !done)}>
+      <div className="mission-console w-full min-w-0 overflow-hidden rounded-2xl border border-[var(--border-bright)] bg-[var(--surface)] shadow-[0_24px_100px_rgba(0,0,0,0.34)]" style={{ maxWidth: 'calc(100vw - 2rem)' }} aria-busy={connecting || (live && !done)}>
       <StatusHeader meta={meta} title={displayTitle} fillPct={fillPct} failed={failed} done={done} elapsedSec={elapsedSec} etaSec={etaSec} silenceSec={silenceSec} eventCount={events.length} />
       {live && silenceSec >= 15 && <StallBanner silenceSec={silenceSec} elapsedSec={elapsedSec} phaseKey={phaseKey} onRefresh={onRefreshStall} />}
       {failed && <FailedState onRefresh={onRefreshStall} />}
