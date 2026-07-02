@@ -22,11 +22,16 @@ LLM_TIMEOUT_SECONDS = 12
 
 # ── FAST TAILORING PROMPT ──────────────────────────────────────────────────────
 # Only generates the header section (~200-350 tokens output → ~2-4s on 8B)
-TAILORING_PROMPT = """You are an ATS resume expert. Tailor ONLY the header for this job.
-Use ONLY skills and facts from the candidate's resume. Never invent anything.
+TAILORING_PROMPT = """You are an ATS resume expert. Tailor the header AND the experience bullet
+points for this job. Use ONLY skills and facts from the candidate's resume. Never invent
+employers, titles, dates, metrics, or technologies not already present.
 
 RESUME:
 {resume_markdown}
+
+CURRENT EXPERIENCE (JSON — keep every company/title/date EXACTLY as given; rewrite ONLY the
+bullet text to emphasize what this job asks for, reusing the facts already in each bullet):
+{experience_json}
 
 JOB:
 Title: {title}
@@ -46,6 +51,9 @@ Return JSON only (no markdown fences, no extra text):
     "<Category2>": ["skill1", "skill2", "skill3"],
     "<Category3>": ["skill1", "skill2", "skill3"],
     "<Category4>": ["skill1", "skill2"]
+  }},
+  "experience_bullets": {{
+    "<company name exactly as given>": ["<tailored bullet 1>", "<tailored bullet 2>", "<tailored bullet 3>", "<tailored bullet 4>"]
   }},
   "keywords_injected": ["kw1", "kw2", "kw3", "kw4", "kw5"]
 }}"""
@@ -186,6 +194,88 @@ def _fallback_tailoring(profile: dict, job: dict, resume_markdown: str) -> dict:
 
 # ── MARKDOWN SECTION PARSER ────────────────────────────────────────────────────
 
+# Real uploads use •/●/▪ as often as -/*/+ — treat them all as bullets.
+_BULLET_RE = re.compile(r'^[-*+•●▪]\s*')
+# "08/2023 - Present" / "05/2022 – 07/2022" — the line that marks a job entry.
+_DATE_RANGE_RE = re.compile(r'\d{1,2}/\d{4}\s*[-–—]\s*(\d{1,2}/\d{4}|present)', re.IGNORECASE)
+# Project header markers: "Name | GitLab: x | Live: y" or any URL.
+_PROJECT_LINK_RE = re.compile(r'\b(gitlab|github|live)\s*:|https?://', re.IGNORECASE)
+
+
+def _parse_headingless(lines: list, result: dict) -> None:
+    """Parse resumes with NO markdown headings (the common real-world upload:
+    'Company | Title' + 'MM/YYYY - MM/YYYY | Location' + • bullets, projects as
+    'Name | GitLab: … | Live: …', trailing 'Certifications:'/'Education:' lines).
+    The heading-based parser finds nothing on these, which used to silently drop
+    the entire resume body from the generated DOCX."""
+    n = len(lines)
+    i = 0
+    while i < n:
+        s = lines[i].strip()
+        if not s:
+            i += 1
+            continue
+        low = s.lower()
+
+        if low.startswith('certifications:'):
+            certs = [s.split(':', 1)[1].strip(' ;')]
+            j = i + 1
+            while j < n:
+                t = lines[j].strip()
+                if (not t or t.lower().startswith('education:')
+                        or _BULLET_RE.match(t) or _DATE_RANGE_RE.search(t)):
+                    break
+                certs.append(t.strip(' ;'))
+                j += 1
+            result['certifications'] = [c for c in certs if c]
+            i = j
+            continue
+
+        if low.startswith('education:'):
+            result['education'] = s.split(':', 1)[1].strip()
+            i += 1
+            continue
+
+        # Experience entry: "Company | Title" followed by a date-range line.
+        if ('|' in s and not _BULLET_RE.match(s)
+                and i + 1 < n and _DATE_RANGE_RE.search(lines[i + 1])):
+            company, _, title = s.partition('|')
+            meta = [p.strip() for p in lines[i + 1].strip().split('|')]
+            entry = {
+                "company": company.strip(), "title": title.strip(),
+                "dates": meta[0] if meta else '',
+                "location": meta[1] if len(meta) > 1 else '',
+                "bullets": [],
+            }
+            i += 2
+            while i < n and _BULLET_RE.match(lines[i].strip()):
+                b = _BULLET_RE.sub('', lines[i].strip()).strip()
+                if b:
+                    entry['bullets'].append(b)
+                i += 1
+            result['experience'].append(entry)
+            continue
+
+        # Project entry: header carrying link markers, then its bullets.
+        if not _BULLET_RE.match(s) and _PROJECT_LINK_RE.search(s):
+            parts = s.split('|')
+            proj = {
+                "name": parts[0].strip(),
+                "links": ' | '.join(p.strip() for p in parts[1:]) if len(parts) > 1 else s,
+                "bullets": [],
+            }
+            i += 1
+            while i < n and _BULLET_RE.match(lines[i].strip()):
+                b = _BULLET_RE.sub('', lines[i].strip()).strip()
+                if b:
+                    proj['bullets'].append(b)
+                i += 1
+            result['projects'].append(proj)
+            continue
+
+        i += 1
+
+
 def _parse_resume_markdown(markdown: str) -> dict:
     """
     Extract structured sections from resume markdown.
@@ -269,10 +359,15 @@ def _parse_resume_markdown(markdown: str) -> dict:
                 for idx in section_map[key]:
                     if idx > start:
                         end = min(end, idx)
-        cert_lines = [re.sub(r'^[-*+]\s*', '', l).strip()
+        cert_lines = [_BULLET_RE.sub('', l).strip()
                       for l in lines[start:end]
-                      if re.match(r'^[-*+]\s', l.strip())]
+                      if _BULLET_RE.match(l.strip())]
         result['certifications'] = cert_lines
+
+    # No headings matched (or they carried no content) — fall back to the
+    # heading-free layout parser so a real-world upload never loses its body.
+    if not result['experience'] and not result['projects']:
+        _parse_headingless(lines, result)
 
     return result
 
@@ -289,15 +384,15 @@ def _parse_experience(lines: list, out: list):
         # Also catch bold-only lines like **Company Name**
         bold_only = re.match(r'^\*\*(.+)\*\*$', stripped)
 
-        if role_h and not stripped.startswith('-'):
+        if role_h and not _BULLET_RE.match(stripped):
             company = role_h.group(1).strip().strip('*').strip()
             title = role_h.group(2).strip().strip('*').strip()
             dates = (role_h.group(3) or '').strip()
             current = {"company": company, "title": title, "dates": dates,
                        "location": "", "bullets": []}
             out.append(current)
-        elif re.match(r'^[-*+]\s', stripped) and current is not None:
-            bullet = re.sub(r'^[-*+]\s*', '', stripped).strip()
+        elif _BULLET_RE.match(stripped) and current is not None:
+            bullet = _BULLET_RE.sub('', stripped).strip()
             if bullet:
                 current['bullets'].append(bullet)
         elif current is not None and not stripped.startswith('#') and len(stripped) < 80:
@@ -317,12 +412,12 @@ def _parse_projects(lines: list, out: list):
             continue
         # Project headers: ### Name or **Name**
         if re.match(r'^#{2,3}\s+', stripped) or (re.match(r'^\*\*.+\*\*', stripped)
-                                                    and not stripped.startswith('-')):
+                                                    and not _BULLET_RE.match(stripped)):
             name = re.sub(r'^#{2,3}\s+|\*\*', '', stripped).strip()
             current = {"name": name, "links": "", "bullets": []}
             out.append(current)
-        elif re.match(r'^[-*+]\s', stripped) and current is not None:
-            bullet = re.sub(r'^[-*+]\s*', '', stripped).strip()
+        elif _BULLET_RE.match(stripped) and current is not None:
+            bullet = _BULLET_RE.sub('', stripped).strip()
             if 'github' in bullet.lower() or 'gitlab' in bullet.lower() or 'http' in bullet.lower():
                 current['links'] = bullet
             else:
@@ -330,6 +425,27 @@ def _parse_projects(lines: list, out: list):
         elif current is not None and not stripped.startswith('#') and len(stripped) < 120:
             if not current['links'] and ('http' in stripped or 'gitlab' in stripped):
                 current['links'] = stripped
+
+
+def _merge_tailored_bullets(parsed: dict, tailored: dict) -> None:
+    """Replace each experience entry's bullets with the LLM's JD-tailored ones,
+    matched by company (case-insensitive). Companies, titles, dates, locations
+    are NEVER touched — tailoring only rewrites bullet text. Missing/empty/
+    malformed model output leaves the original bullets in place."""
+    raw = tailored.get("experience_bullets")
+    if not isinstance(raw, dict):
+        return
+    by_company = {}
+    for k, v in raw.items():
+        if isinstance(v, list):
+            cleaned = [re.sub(r"\s+", " ", str(b)).strip() for b in v]
+            cleaned = [b for b in cleaned if len(b) > 15]  # drop stubs/junk
+            if cleaned:
+                by_company[str(k).strip().lower()] = cleaned[:4]
+    for role in parsed.get("experience", []):
+        new = by_company.get((role.get("company") or "").strip().lower())
+        if new:
+            role["bullets"] = new
 
 
 # ── GITLAB LINKS ───────────────────────────────────────────────────────────────
@@ -636,15 +752,24 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
             timeout=LLM_TIMEOUT_SECONDS,
         )
 
+        # Compact experience JSON so the model can tailor bullet text while the
+        # merge step below guarantees company/title/dates stay verbatim.
+        experience_json = json.dumps([
+            {"company": e.get("company", ""), "title": e.get("title", ""),
+             "bullets": e.get("bullets", [])[:5]}
+            for e in parsed_sections.get("experience", [])[:5]
+        ], indent=0)
+
         used_fallback = False
         try:
-            # Generate only the header tailoring (~200-350 tokens → ~2-4s)
+            # Header + tailored bullets in ONE call (~600-900 tokens → ~5-8s on 8B)
             msg = client.chat.completions.create(
                 model="meta/llama-3.1-8b-instruct",
-                max_tokens=500,
+                max_tokens=1000,
                 temperature=0.1,
                 messages=[{"role": "user", "content": TAILORING_PROMPT.format(
                     resume_markdown=resume_markdown[:1500],
+                    experience_json=experience_json[:2500],
                     title=job.get("title", ""),
                     company=job.get("company", ""),
                     description=(job.get("description_snippet") or "")[:800],
@@ -655,6 +780,10 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
             used_fallback = True
             log.warning("resume_llm_fallback", match_id=match_id, error=str(llm_exc))
             tailored = _fallback_tailoring(profile, job, resume_markdown)
+
+        # Swap in JD-tailored bullet text where the model provided it; the
+        # original bullets are ALWAYS the fallback so the body never thins out.
+        _merge_tailored_bullets(parsed_sections, tailored)
 
         candidate_name = profile.get("full_name", "Candidate")
         docx_bytes = _build_docx(tailored, candidate_name, profile, parsed_sections)
