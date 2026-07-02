@@ -78,10 +78,14 @@ _NON_US_ONLY = frozenset([
 ])
 
 # Explicit US markers that OVERRIDE a non-US token (e.g. "Remote — US or Europe"
-# is US-eligible; "Remote — Europe" is not).
+# is US-eligible; "Remote — Europe" is not). STRONG phrases only — the bare
+# token "us" is deliberately NOT here: job descriptions almost always contain
+# "about us" / "join us" / "work with us", which would flip the gate to
+# US-eligible for practically every posting (including Berlin/EMEA roles).
+# Bare "US" is honored ONLY in the location field (allow_bare_us below).
 _US_SIGNALS = (
-    "united states", "usa", "u s", "us", "us only", "us based",
-    "us remote", "remote us", "north america", "americas",
+    "united states", "usa", "u s", "us only", "us based",
+    "us remote", "remote us", "us eligible", "north america", "americas",
 )
 
 _RESUME_SKILL_HINTS = (
@@ -123,8 +127,15 @@ def _has_market_phrase(text: str, phrase: str) -> bool:
     return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", norm) is not None
 
 
-def _has_us_signal(text: str) -> bool:
-    return any(_has_market_phrase(text, signal) for signal in _US_SIGNALS)
+def _has_us_signal(text: str, allow_bare_us: bool = False) -> bool:
+    """Strong US phrases anywhere; the bare 'us' token only when the caller is
+    inspecting a LOCATION string ('Remote — US' yes; 'join us' in a JD no)."""
+    if any(_has_market_phrase(text, signal) for signal in _US_SIGNALS):
+        return True
+    if allow_bare_us:
+        norm = _normalize_market_text(text)
+        return re.search(r"(?<![a-z0-9])us(?![a-z0-9])", norm) is not None
+    return False
 
 
 def _has_non_us_signal(text: str) -> bool:
@@ -141,8 +152,9 @@ def _is_us_eligible(job_loc: str) -> bool:
     if not loc.strip():
         return True
     # Token/phrase matching avoids rejecting words like "Indianapolis" because
-    # they contain a non-US country token as a raw substring.
-    if _has_us_signal(loc):
+    # they contain a non-US country token as a raw substring. Bare "US" is
+    # meaningful in a location string, so it's allowed here.
+    if _has_us_signal(loc, allow_bare_us=True):
         return True
     return not _has_non_us_signal(loc)
 
@@ -152,7 +164,17 @@ def _job_market_text(job: dict) -> str:
 
 
 def _is_us_eligible_job(job: dict) -> bool:
-    return _is_us_eligible(_job_market_text(job))
+    """US gate over the whole posting. The location field may use a bare 'US'
+    token; title/description must show a STRONG US phrase (otherwise every JD
+    containing 'about us'/'join us' would pass, EMEA offices included)."""
+    loc = str(job.get("location") or "")
+    rest = f"{job.get('title') or ''} {job.get('description_snippet') or ''}"
+    combined = f"{loc} {rest}"
+    if not combined.strip():
+        return True
+    if _has_us_signal(loc, allow_bare_us=True) or _has_us_signal(rest):
+        return True
+    return not _has_non_us_signal(combined)
 
 
 def _profile_query_skills(profile: dict) -> list:

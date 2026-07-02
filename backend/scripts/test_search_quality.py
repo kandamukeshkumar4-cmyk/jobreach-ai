@@ -108,6 +108,29 @@ def main() -> None:
           len(ordered) == 1 and ordered[0]["url"] == "https://us.example/role",
           ordered)
 
+    print("== bare-'us' token must NOT leak through JD boilerplate ==")
+    from app.workers.search import _is_us_eligible_job
+    berlin = {"location": "Berlin, Germany", "title": "AI Engineer",
+              "description_snippet": "About us: join us at our Berlin office."}
+    check("'about us' in JD does not make a Berlin office US-eligible",
+          not _is_us_eligible_job(berlin))
+    london = {"location": "", "title": "ML Engineer - London",
+              "description_snippet": "Join us! We are a London-based team working across EMEA."}
+    check("'join us' in JD does not make an EMEA role US-eligible",
+          not _is_us_eligible_job(london))
+    austin = {"location": "Austin, TX", "title": "AI Engineer",
+              "description_snippet": "About us: we build agents."}
+    check("US-located job with 'about us' boilerplate still passes",
+          _is_us_eligible_job(austin))
+    bare_us_loc = {"location": "Remote - US", "title": "AI Engineer",
+                   "description_snippet": "Join us to build agents."}
+    check("bare 'US' token in the LOCATION field still passes",
+          _is_us_eligible_job(bare_us_loc))
+    strong_in_jd = {"location": "", "title": "AI Engineer",
+                    "description_snippet": "Must have U.S. work authorization. Join us!"}
+    check("strong US phrase in JD passes even with blank location",
+          _is_us_eligible_job(strong_in_jd))
+
     n_pass, n = sum(results), len(results)
     print(f"\n=== {n_pass}/{n} search-quality checks passed ===")
     sys.exit(0 if n_pass == n else 1)
