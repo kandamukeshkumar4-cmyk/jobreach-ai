@@ -77,6 +77,46 @@ _NON_US_ONLY = frozenset([
     "philippines", "indonesia", "malaysia", "thailand", "pakistan",
 ])
 
+# Major non-US hiring hubs — postings often carry only the CITY ("Paris",
+# "Berlin; London; Munich"), never the country, so country tokens alone leak
+# them (observed live: Mistral Paris/London roles surfaced as matches). Cities
+# are matched ONLY against location+title (a US job's description legitimately
+# mentions "our London office" / "customers in Tokyo"). US towns sharing these
+# names ("Paris, TX", "Dublin, OH") are protected by the comma-state signal.
+_NON_US_CITIES = frozenset([
+    "london", "paris", "berlin", "munich", "hamburg", "frankfurt", "amsterdam",
+    "rotterdam", "dublin", "madrid", "barcelona", "lisbon", "stockholm",
+    "copenhagen", "oslo", "helsinki", "tallinn", "riga", "vilnius", "warsaw",
+    "krakow", "prague", "vienna", "zurich", "geneva", "milan", "rome",
+    "brussels", "budapest", "bucharest", "sofia", "athens", "belgrade",
+    "zagreb", "bratislava", "ljubljana", "kyiv", "istanbul", "edinburgh",
+    "manchester", "leeds", "glasgow", "toronto", "vancouver", "montreal",
+    "ottawa", "calgary", "sydney", "melbourne", "brisbane", "auckland",
+    "wellington", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad",
+    "pune", "chennai", "gurgaon", "noida", "tokyo", "osaka", "seoul",
+    "beijing", "shanghai", "shenzhen", "hangzhou", "taipei", "tel aviv",
+    "cairo", "lagos", "nairobi", "sao paulo", "são paulo", "mexico city",
+    "bogota", "bogotá", "buenos aires", "santiago", "lima", "montevideo",
+    "riyadh", "doha", "manila", "jakarta", "kuala lumpur", "bangkok",
+    "ho chi minh", "hanoi", "karachi", "lahore", "islamabad",
+])
+
+# Regions/countries are decisive ANYWHERE in the posting text; cities only in
+# location+title. _NON_US_ONLY (the union) serves location-string checks
+# (_is_us_eligible on a bare location field), where a city token IS decisive.
+_NON_US_REGIONS = _NON_US_ONLY
+_NON_US_ONLY = _NON_US_REGIONS | _NON_US_CITIES
+
+# ", TX" / ", OH" style suffix — a comma-anchored US state abbreviation is a
+# strong US signal and protects US towns that share a name with a foreign hub
+# (Paris TX, Dublin OH, Rome GA). Comma-anchored so "Remote in Europe" ("in")
+# and "Berlin; London" never match.
+_US_STATE_ABBR_RE = re.compile(
+    r",\s*(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|"
+    r"mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|"
+    r"va|wa|wv|wi|wy|dc)(?![a-z0-9])"
+)
+
 # Explicit US markers that OVERRIDE a non-US token (e.g. "Remote — US or Europe"
 # is US-eligible; "Remote — Europe" is not). STRONG phrases only — the bare
 # token "us" is deliberately NOT here: job descriptions almost always contain
@@ -133,6 +173,10 @@ def _has_us_signal(text: str, allow_bare_us: bool = False) -> bool:
     if any(_has_market_phrase(text, signal) for signal in _US_SIGNALS):
         return True
     if allow_bare_us:
+        # Location-only context: bare "US" token, or a comma-anchored US state
+        # abbreviation ("Paris, TX" / "Dublin, OH" are US towns, not EU hubs).
+        if _US_STATE_ABBR_RE.search((text or "").lower()):
+            return True
         norm = _normalize_market_text(text)
         return re.search(r"(?<![a-z0-9])us(?![a-z0-9])", norm) is not None
     return False
@@ -168,13 +212,18 @@ def _is_us_eligible_job(job: dict) -> bool:
     token; title/description must show a STRONG US phrase (otherwise every JD
     containing 'about us'/'join us' would pass, EMEA offices included)."""
     loc = str(job.get("location") or "")
-    rest = f"{job.get('title') or ''} {job.get('description_snippet') or ''}"
-    combined = f"{loc} {rest}"
+    title = str(job.get("title") or "")
+    desc = str(job.get("description_snippet") or "")
+    combined = f"{loc} {title} {desc}"
     if not combined.strip():
         return True
-    if _has_us_signal(loc, allow_bare_us=True) or _has_us_signal(rest):
+    if _has_us_signal(loc, allow_bare_us=True) or _has_us_signal(f"{title} {desc}"):
         return True
-    return not _has_non_us_signal(combined)
+    # Countries/regions are decisive anywhere; city names only in location or
+    # title (US JDs legitimately mention foreign cities in prose).
+    if any(_has_market_phrase(combined, r) for r in _NON_US_REGIONS):
+        return False
+    return not any(_has_market_phrase(f"{loc} {title}", c) for c in _NON_US_CITIES)
 
 
 def _profile_query_skills(profile: dict) -> list:
@@ -564,9 +613,14 @@ def _infer_exa_location(title: str, text: str, fallback: str) -> str:
     explicit = (fallback or "").strip()
     if _has_us_signal(haystack):
         return "Remote (US-eligible)" if "remote" in haystack.lower() else "United States"
-    for region in sorted(_NON_US_ONLY, key=len, reverse=True):
+    # Regions/countries can be inferred from the full text; city names only
+    # from the TITLE (US postings mention foreign cities in body prose).
+    for region in sorted(_NON_US_REGIONS, key=len, reverse=True):
         if _has_market_phrase(haystack, region):
             return region.title()
+    for city in sorted(_NON_US_CITIES, key=len, reverse=True):
+        if _has_market_phrase(title or "", city):
+            return city.title()
     return explicit
 
 

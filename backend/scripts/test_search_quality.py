@@ -131,6 +131,28 @@ def main() -> None:
     check("strong US phrase in JD passes even with blank location",
           _is_us_eligible_job(strong_in_jd))
 
+    print("== non-US CITY names (observed live leak: Paris/London/Berlin matches) ==")
+    check("Paris dropped", not _is_us_eligible("Paris"))
+    check("Remote, London dropped", not _is_us_eligible("Remote, London"))
+    check("Berlin; London; Munich; Stockholm dropped",
+          not _is_us_eligible("Berlin; London; Munich; Paris; Stockholm; Tallinn"))
+    check("Toronto dropped", not _is_us_eligible("Toronto"))
+    check("Bangalore dropped", not _is_us_eligible("Bangalore"))
+    check("Paris, TX passes (comma-state US signal)", _is_us_eligible("Paris, TX"))
+    check("Dublin, OH passes (comma-state US signal)", _is_us_eligible("Dublin, OH"))
+    check("Remote in Europe still dropped ('in' is not a state signal)",
+          not _is_us_eligible("Remote in Europe"))
+    check("US & Canada combo passes (explicit US marker)",
+          _is_us_eligible("Remote, United States & Canada"))
+    us_job_mentions_city = {"location": "Remote (US)", "title": "AI Engineer",
+                            "description_snippet": "You may travel to our London office twice a year."}
+    check("US job mentioning London in JD prose still passes",
+          _is_us_eligible_job(us_job_mentions_city))
+    city_in_title = {"location": "", "title": "AI Engineer - Paris",
+                     "description_snippet": "Build AI systems."}
+    check("city in TITLE with blank location is dropped",
+          not _is_us_eligible_job(city_in_title))
+
     n_pass, n = sum(results), len(results)
     print(f"\n=== {n_pass}/{n} search-quality checks passed ===")
     sys.exit(0 if n_pass == n else 1)
