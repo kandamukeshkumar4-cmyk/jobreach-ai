@@ -289,6 +289,15 @@ html {
   .mission-console .animate-spin {
     animation: none;
   }
+
+  /* Mission v2 motion — silenced for reduced-motion; state stays legible via
+     color, shape, and labels. */
+  .agent-pulse-ring,
+  .agent-breathe,
+  .stage-sheen,
+  .stat-pop {
+    animation: none;
+  }
 }
 
 /* ── Marquee animations ── */
@@ -308,4 +317,42 @@ html {
 
 @utility animate-marquee-vertical {
   animation: marquee-vertical var(--duration, 40s) linear infinite;
+}
+
+/* ── Mission v2: SaaS product pulse ── */
+/* Concentric expanding rings for the "AI is working" orb. */
+@keyframes agentPulseRing {
+  0%   { transform: scale(0.75); opacity: 0.55; }
+  100% { transform: scale(2.1);  opacity: 0; }
+}
+.agent-pulse-ring { animation: agentPulseRing 2.6s ease-out infinite; }
+
+/* Soft breathing glow for the active current-step card + orb core. */
+@keyframes agentBreathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(94, 198, 255, 0); }
+  50%      { box-shadow: 0 0 36px 2px rgba(94, 198, 255, 0.16); }
+}
+.agent-breathe { animation: agentBreathe 3.4s ease-in-out infinite; }
+
+/* Slow shimmer across the active stage card border to signal life. */
+@keyframes stageSheen {
+  0%   { background-position: -150% 0; }
+  100% { background-position: 250% 0; }
+}
+.stage-sheen {
+  background-image: linear-gradient(110deg, transparent 30%, rgba(94,198,255,0.10) 50%, transparent 70%);
+  background-size: 200% 100%;
+  animation: stageSheen 2.8s linear infinite;
+}
+
+/* Stat-card count-up pop. */
+@keyframes statPop {
+  0%   { transform: scale(0.92); opacity: 0.4; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+.stat-pop { animation: statPop 280ms ease-out both; }
+
+/* Progress ring dash for the scoring dial. */
+@keyframes ringDash {
+  to { stroke-dashoffset: 0; }
 }

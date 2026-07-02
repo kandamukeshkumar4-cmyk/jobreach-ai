@@ -7,7 +7,7 @@
  * backend. Not linked from nav.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { MissionEventOut, MissionOut } from '@/lib/types';
 import { MissionFeed } from '@/components/mission/mission-feed';
 import type { MissionStreamStatus } from '@/hooks/useMissionStream';
@@ -51,6 +51,10 @@ const SCRIPT: Scripted[] = [
   { event_type: 'ok', message: 'Mission complete', metadata: { stage: 'complete' } },
 ];
 
+const MOCK_NOW_MS = Date.now();
+const MOCK_STARTED_AT = new Date(MOCK_NOW_MS - 42_000).toISOString();
+const MOCK_COMPLETED_AT = new Date(MOCK_NOW_MS + 12_000).toISOString();
+
 export default function MissionConsoleMockup() {
   const [n, setN] = useState(3);
   const [playing, setPlaying] = useState(true);
@@ -62,7 +66,7 @@ export default function MissionConsoleMockup() {
     return () => clearTimeout(t);
   }, [n, playing]);
 
-  const startedAt = useMemo(() => new Date(Date.now() - 42_000).toISOString(), []);
+  const startedAt = MOCK_STARTED_AT;
   const events: MissionEventOut[] = SCRIPT.slice(0, n).map((s, i) => ({
     id: `evt-${i}`,
     mission_id: 'mock',
@@ -70,7 +74,7 @@ export default function MissionConsoleMockup() {
     message: s.message,
     detail: s.detail,
     metadata: s.metadata,
-    created_at: new Date(Date.now() - (n - i) * 1100).toISOString(),
+    created_at: new Date(MOCK_NOW_MS - (n - i) * 1100).toISOString(),
   }));
 
   const done = n >= SCRIPT.length;
@@ -89,22 +93,22 @@ export default function MissionConsoleMockup() {
     total_filtered: n > 11 ? 30 : 0,
     total_matches: done ? 3 : 0,
     started_at: startedAt,
-    completed_at: done ? new Date().toISOString() : undefined,
+    completed_at: done ? MOCK_COMPLETED_AT : undefined,
     created_at: startedAt,
     sources: ['exa', 'greenhouse', 'lever', 'ashby', 'remoteok', 'rss'],
   } as unknown as MissionOut;
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] p-8">
+    <div className="min-h-screen bg-[var(--bg)] p-4 sm:p-8">
       <div className="mx-auto max-w-5xl">
-        <div className="mb-4 flex items-center gap-3">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
           <button onClick={() => setPlaying((p) => !p)} className="rounded-md border border-[var(--border-bright)] bg-[var(--card)] px-3 py-1.5 text-sm text-[var(--text)]">
             {playing ? 'Pause' : 'Play'}
           </button>
           <button onClick={() => { setN(0); setPlaying(true); }} className="rounded-md border border-[var(--border-bright)] bg-[var(--card)] px-3 py-1.5 text-sm text-[var(--text)]">
             Restart
           </button>
-          <input type="range" min={0} max={SCRIPT.length} value={n} onChange={(e) => { setPlaying(false); setN(Number(e.target.value)); }} className="flex-1" />
+          <input type="range" min={0} max={SCRIPT.length} value={n} onChange={(e) => { setPlaying(false); setN(Number(e.target.value)); }} className="min-w-0 basis-full sm:flex-1 sm:basis-auto" />
           <span className="text-sm text-[var(--muted2)]" style={{ fontFamily: 'var(--font-mono)' }}>{n}/{SCRIPT.length}</span>
         </div>
         <MissionFeed events={events} status={status} mission={mission} missionTitle="AI Engineer" lastEventAt={lastEventAt} onRefreshStall={() => setN((x) => Math.min(SCRIPT.length, x + 1))} />
