@@ -231,6 +231,35 @@ export function MatchCard({ match }: MatchCardProps) {
   const [downloading, setDownloading] = useState(false);
   const pollCountRef = useRef(0);
 
+  useEffect(() => {
+    if (!match.resume_ready) return;
+    let cancelled = false;
+
+    async function loadExistingResume() {
+      try {
+        const docs = await api.resumes.forMatch(match.id);
+        if (cancelled || docs.length === 0) return;
+        const url = docs[0]?.download_url;
+        if (!url) return;
+
+        // Existing documents should be visible after refresh/login, but they
+        // should not auto-download until the user explicitly clicks download.
+        autoDownloadedRef.current = true;
+        setResumeUrl(url);
+        setResumeError(null);
+        setResumeState((current) => (current === 'working' ? current : 'success'));
+      } catch {
+        // Non-blocking: the primary match card still renders, and the user can
+        // retry generation manually if the lookup fails.
+      }
+    }
+
+    void loadExistingResume();
+    return () => {
+      cancelled = true;
+    };
+  }, [match.id, match.resume_ready]);
+
   const handleDownload = useCallback(async () => {
     if (!resumeUrl || downloading) return;
     setDownloading(true);

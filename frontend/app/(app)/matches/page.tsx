@@ -41,7 +41,8 @@ export default function MatchesIndexPage() {
           Matches
         </h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Pick a mission to review its scored job matches.
+          Pick a mission to review every scored role. Mission cards show the
+          A/B strong-match count.
         </p>
       </div>
 
@@ -95,7 +96,7 @@ export default function MatchesIndexPage() {
                         {mission.total_matches}
                       </span>
                       <span className="text-[var(--muted)]">
-                        {mission.total_matches === 1 ? 'match' : 'matches'}
+                        strong {mission.total_matches === 1 ? 'match' : 'matches'}
                       </span>
                     </span>
 

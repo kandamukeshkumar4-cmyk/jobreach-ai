@@ -741,6 +741,55 @@ def _build_docx(tailored: dict, candidate_name: str, profile: dict,
 
 # ── CELERY TASK ────────────────────────────────────────────────────────────────
 
+def _sync_application_resume_links(
+    db,
+    match: dict,
+    match_id: str,
+    download_url: str | None,
+    cover_letter_url: str | None,
+) -> None:
+    """Make generated documents durable in the tracker-facing applications table."""
+    if not download_url:
+        return
+
+    mission = match.get("missions") or {}
+    profile = mission.get("profiles") or {}
+    user_id = mission.get("user_id") or profile.get("user_id")
+    if not user_id:
+        log.warning("resume_application_sync_missing_user", match_id=match_id)
+        return
+
+    update = {
+        "resume_pdf_url": download_url,
+        "cover_letter_pdf_url": cover_letter_url,
+    }
+
+    existing = (
+        db.table("applications")
+        .select("id")
+        .eq("match_id", match_id)
+        .eq("user_id", user_id)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        db.table("applications").update(update).eq("match_id", match_id).eq("user_id", user_id).execute()
+        return
+
+    job = match.get("jobs") or {}
+    db.table("applications").insert({
+        "user_id": user_id,
+        "match_id": match_id,
+        "job_title": job.get("title") or "Untitled role",
+        "company": job.get("company") or "Unknown company",
+        "overall_score": match.get("overall_score"),
+        "grade": match.get("grade"),
+        "status": "evaluated",
+        **update,
+    }).execute()
+
+
 @celery_app.task(bind=True, queue="resume", name="app.workers.resume.generate_resume_task",
                  time_limit=RESUME_TASK_TIME_LIMIT_SECONDS,
                  soft_time_limit=RESUME_TASK_SOFT_LIMIT_SECONDS)
@@ -872,14 +921,18 @@ def generate_resume_task(self, match_id: str, include_cover_letter: bool = False
             if (base_path and cover_letter_b64) else None
         )
 
-        # Update applications table so the Resumes page can surface these docs
+        # Keep generated documents visible after refresh/login even when the
+        # user tailored first and had not manually clicked "Track" yet.
         try:
-            db.table("applications").update({
-                "resume_pdf_url": download_url,
-                "cover_letter_pdf_url": cover_letter_url,
-            }).eq("match_id", match_id).execute()
+            _sync_application_resume_links(
+                db,
+                match,
+                match_id,
+                download_url,
+                cover_letter_url,
+            )
         except Exception as app_exc:
-            log.warning("applications_resume_url_update_failed", match_id=match_id, error=str(app_exc))
+            log.warning("applications_resume_url_sync_failed", match_id=match_id, error=str(app_exc))
 
         return {
             "pdf_url": download_url,

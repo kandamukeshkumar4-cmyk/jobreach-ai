@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from typing import List, Optional
 
 from app.database import get_db
@@ -38,11 +38,27 @@ async def list_applications(
 @router.post("/", response_model=ApplicationOut, status_code=201)
 async def create_application(
     payload: ApplicationCreate,
+    response: Response,
     db=Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
     # Ownership: the match must belong to one of the caller's missions.
     require_owned_match(db, payload.match_id, user_id)
+    existing = (
+        db.table("applications")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("match_id", payload.match_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        response.status_code = 200
+        return existing[0]
+
     match = (
         db.table("matches")
         .select("*, jobs(title, company)")
