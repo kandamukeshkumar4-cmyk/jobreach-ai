@@ -3,8 +3,23 @@
 Run from backend/:  python -m scripts.test_search_quality   (no env needed)
 Exits non-zero on failure; prints PASS/FAIL per check.
 """
+import os
 import sys
-from app.workers.search import _is_us_eligible, _resume_driven_queries, _dedupe_jobs
+
+os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
+os.environ.setdefault("SUPABASE_ANON_KEY", "anon")
+os.environ.setdefault("SUPABASE_SERVICE_KEY", "service")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("NVIDIA_API_KEY", "dummy")
+
+from app.workers.search import (
+    _dedupe_jobs,
+    _filter_jobs,
+    _filter_then_dedupe_jobs,
+    _infer_exa_location,
+    _is_us_eligible,
+    _resume_driven_queries,
+)
 
 results = []
 
@@ -23,6 +38,7 @@ def main() -> None:
     check("Remote Europe dropped", not _is_us_eligible("Remote, Europe"))
     check("Canada dropped", not _is_us_eligible("Toronto, Canada"))
     check("US city passes", _is_us_eligible("San Francisco, CA"))
+    check("Indianapolis is not India", _is_us_eligible("Indianapolis, IN"))
     check("Remote (US) passes", _is_us_eligible("Remote (US)"))
     check("plain Remote passes", _is_us_eligible("Remote"))
     check("empty/unknown passes (conservative)", _is_us_eligible(""))
@@ -43,6 +59,28 @@ def main() -> None:
     check("capped at 3 variants", len(qs) <= 3, len(qs))
     check("empty profile degrades to plain query",
           _resume_driven_queries("ai engineer", {}) == ["ai engineer"])
+    resume_only = _resume_driven_queries(
+        "ai engineer",
+        {"resume_markdown": "Built Python FastAPI services on AWS with Redis."},
+    )
+    check("resume markdown enriches query when profile fields are empty",
+          resume_only[0] == "ai engineer Python FastAPI AWS",
+          resume_only)
+
+    print("== US-market gate reads full job text ==")
+    exa_style_jobs = [
+        {"source": "exa", "title": "AI Engineer - Abu Dhabi", "location": "", "description_snippet": "Build AI systems in UAE."},
+        {"source": "exa", "title": "AI Engineer", "location": "", "description_snippet": "Remote role for EMEA and Singapore."},
+        {"source": "exa", "title": "AI Engineer", "location": "", "description_snippet": "Remote US role building AI systems."},
+    ]
+    exa_filtered = _filter_jobs(exa_style_jobs, {"target_roles": ["AI Engineer"]}, "", 0)
+    check("Exa non-US text is dropped even when location is blank",
+          [j["description_snippet"] for j in exa_filtered] == ["Remote US role building AI systems."],
+          exa_filtered)
+    check("Exa title/body infers non-US location instead of blank mission filter",
+          _infer_exa_location("AI Engineer - Abu Dhabi", "Build AI systems in UAE.", "") == "Abu Dhabi")
+    check("Exa title/body keeps explicit US eligibility",
+          _infer_exa_location("AI Engineer", "Remote US role.", "Remote") == "Remote (US-eligible)")
 
     print("== cross-source dedup ==")
     jobs = [
@@ -60,6 +98,15 @@ def main() -> None:
           any(j["title"] == "Staff Product Designer" for j in out))
     check("same title at another company kept",
           any(j["company"] == "OtherCo" for j in out))
+
+    ordering_jobs = [
+        {"url": "https://emea.example/role", "company": "Acme", "title": "AI Engineer", "location": "Remote - EMEA", "source": "exa"},
+        {"url": "https://us.example/role", "company": "Acme", "title": "AI Engineer", "location": "United States", "source": "ashby"},
+    ]
+    ordered = _filter_then_dedupe_jobs(ordering_jobs, {"target_roles": ["AI Engineer"]}, "", 0)
+    check("US filtering happens before fuzzy dedup so the US copy survives",
+          len(ordered) == 1 and ordered[0]["url"] == "https://us.example/role",
+          ordered)
 
     n_pass, n = sum(results), len(results)
     print(f"\n=== {n_pass}/{n} search-quality checks passed ===")

@@ -80,9 +80,55 @@ _NON_US_ONLY = frozenset([
 # Explicit US markers that OVERRIDE a non-US token (e.g. "Remote — US or Europe"
 # is US-eligible; "Remote — Europe" is not).
 _US_SIGNALS = (
-    "united states", "usa", "u.s.", ", us", "(us", "us only", "us-based",
+    "united states", "usa", "u s", "us", "us only", "us based",
     "us remote", "remote us", "north america", "americas",
 )
+
+_RESUME_SKILL_HINTS = (
+    ("python", "Python"),
+    ("fastapi", "FastAPI"),
+    ("django", "Django"),
+    ("flask", "Flask"),
+    ("aws", "AWS"),
+    ("azure", "Azure"),
+    ("gcp", "GCP"),
+    ("kubernetes", "Kubernetes"),
+    ("docker", "Docker"),
+    ("redis", "Redis"),
+    ("postgres", "Postgres"),
+    ("postgresql", "Postgres"),
+    ("sql", "SQL"),
+    ("react", "React"),
+    ("typescript", "TypeScript"),
+    ("javascript", "JavaScript"),
+    ("node", "Node"),
+    ("celery", "Celery"),
+    ("llm", "LLM"),
+    ("openai", "OpenAI"),
+    ("langchain", "LangChain"),
+    ("pytorch", "PyTorch"),
+    ("tensorflow", "TensorFlow"),
+)
+
+
+def _normalize_market_text(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", (text or "").lower())).strip()
+
+
+def _has_market_phrase(text: str, phrase: str) -> bool:
+    norm = _normalize_market_text(text)
+    needle = _normalize_market_text(phrase)
+    if not norm or not needle:
+        return False
+    return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", norm) is not None
+
+
+def _has_us_signal(text: str) -> bool:
+    return any(_has_market_phrase(text, signal) for signal in _US_SIGNALS)
+
+
+def _has_non_us_signal(text: str) -> bool:
+    return any(_has_market_phrase(text, region) for region in _NON_US_ONLY)
 
 
 def _is_us_eligible(job_loc: str) -> bool:
@@ -91,14 +137,37 @@ def _is_us_eligible(job_loc: str) -> bool:
     explicit US marker is dropped. This runs regardless of the mission's
     location_filter — previously a 'Remote'/empty filter skipped location
     checks entirely and Abu Dhabi/EMEA/Singapore roles reached scoring."""
-    loc = (job_loc or "").lower()
+    loc = job_loc or ""
     if not loc.strip():
         return True
-    # Substring markers plus a word-boundary match for a bare "US"/"U.S." token
-    # ("Remote — US or Europe" is US-eligible; "status"/"Australia" are not hits).
-    if any(us in loc for us in _US_SIGNALS) or re.search(r"\bu\.?s\.?a?\b", loc):
+    # Token/phrase matching avoids rejecting words like "Indianapolis" because
+    # they contain a non-US country token as a raw substring.
+    if _has_us_signal(loc):
         return True
-    return not any(region in loc for region in _NON_US_ONLY)
+    return not _has_non_us_signal(loc)
+
+
+def _job_market_text(job: dict) -> str:
+    return " ".join(str(job.get(k) or "") for k in ("location", "title", "description_snippet"))
+
+
+def _is_us_eligible_job(job: dict) -> bool:
+    return _is_us_eligible(_job_market_text(job))
+
+
+def _profile_query_skills(profile: dict) -> list:
+    skills = [str(sk).strip() for sk in (profile.get("skills") or []) if str(sk).strip()]
+    seen = {s.lower() for s in skills}
+    resume = profile.get("resume_markdown") or ""
+    for token, label in _RESUME_SKILL_HINTS:
+        if len(skills) >= 8:
+            break
+        if label.lower() in seen:
+            continue
+        if _has_market_phrase(resume, token):
+            skills.append(label)
+            seen.add(label.lower())
+    return skills
 
 
 def _resume_driven_queries(query: str, profile: dict) -> list:
@@ -106,7 +175,7 @@ def _resume_driven_queries(query: str, profile: dict) -> list:
     top skills from their profile/resume, and add their target_roles as extra
     query variants. Previously Exa searched only the literal typed query, so
     two users with different resumes got identical candidate pools."""
-    skills = [str(sk).strip() for sk in (profile.get("skills") or []) if str(sk).strip()]
+    skills = _profile_query_skills(profile)
     skill_str = " ".join(skills[:3])
     queries = [f"{query} {skill_str}".strip() if skill_str else query]
     ql = query.lower().strip()
@@ -272,29 +341,22 @@ def run_mission(self: Task, mission_id: str):
         _pub(r, mission_id, "ok", f"Scanned {total_scanned:,} postings across {len(sources)} sources",
              meta={"stage": "search", "scanned": total_scanned, "total_scanned": total_scanned})
 
-        # Cross-source dedup (career-ops role-matcher rule): the same opening
-        # often appears via Exa AND an ATS feed AND a board — collapse exact-URL
-        # repeats and same-company fuzzy-title repeats so one real opening is
-        # researched/scored once, not four times.
-        before_dedupe = len(raw_jobs)
-        raw_jobs = _dedupe_jobs(raw_jobs)
-        if before_dedupe - len(raw_jobs) > 0:
-            _pub(r, mission_id, "ok",
-                 f"Removed {before_dedupe - len(raw_jobs)} duplicate postings across sources",
-                 meta={"stage": "filter", "deduped": before_dedupe - len(raw_jobs)})
-
-        # ── DEDUPLICATE ───────────────────────────────────────────────────────
-        seen_urls = set()
-        unique_jobs = []
-        for j in raw_jobs:
-            if j.get("url") and j["url"] not in seen_urls:
-                seen_urls.add(j["url"])
-                unique_jobs.append(j)
-
         # ── FILTER (location, role, conservative salary) ─────────────────────
         _pub(r, mission_id, "run", f"Applying profile filters: location={location or 'any'}, salary≥${salary_min or 0:,}...",
              meta={"stage": "filter", "scanned": total_scanned})
-        filtered = _filter_jobs(unique_jobs, profile, location, salary_min)
+        filter_matches = _filter_jobs(raw_jobs, profile, location, salary_min)
+
+        # Cross-source dedup must run AFTER the US/profile filter. If an EMEA
+        # Exa copy arrives before a US ATS copy for the same company/title,
+        # deduping first would keep EMEA, drop US, and then the US gate would
+        # remove EMEA — losing the valid role entirely.
+        before_dedupe = len(filter_matches)
+        filtered = _dedupe_exact_urls(_dedupe_jobs(filter_matches))
+        if before_dedupe - len(filtered) > 0:
+            _pub(r, mission_id, "ok",
+                 f"Removed {before_dedupe - len(filtered)} duplicate postings across sources",
+                 meta={"stage": "filter", "deduped": before_dedupe - len(filtered)})
+
         # Round-robin interleave by source so the SCORE_CAP cap samples ACROSS
         # providers. Without this, Exa (appended first, ~100 results) fills the
         # entire front of the list and starves Ashby/SmartRecruiters/Workable/
@@ -450,15 +512,16 @@ def _search_exa(query: str, location: str, api_key: str) -> list:
         results = resp.json().get("results", [])
         jobs = []
         for r in results:
+            title = r.get("title", "")
             text = (r.get("text") or "")
-            smin, smax = _parse_salary(f"{r.get('title','')} {text}")
+            smin, smax = _parse_salary(f"{title} {text}")
             jobs.append({
-                "title": r.get("title", ""),
+                "title": title,
                 "url": r.get("url", ""),
-                "company": _extract_company(r.get("url", ""), r.get("title", "")),
+                "company": _extract_company(r.get("url", ""), title),
                 "description_snippet": text[:500],
                 "source": "exa",
-                "location": location,
+                "location": _infer_exa_location(title, text, location),
                 "salary_min": smin,
                 "salary_max": smax,
             })
@@ -466,6 +529,23 @@ def _search_exa(query: str, location: str, api_key: str) -> list:
     except Exception as e:
         log.warning("exa_search_failed", error=str(e))
         return []
+
+
+def _infer_exa_location(title: str, text: str, fallback: str) -> str:
+    """Best-effort Exa location extraction for the US gate.
+
+    Exa search results do not provide a structured location field. Do not stamp
+    every result with the mission location; inspect result title/body for clear
+    market signals so non-US postings do not inherit a blank/Remote filter.
+    """
+    haystack = f"{title or ''} {text or ''}"
+    explicit = (fallback or "").strip()
+    if _has_us_signal(haystack):
+        return "Remote (US-eligible)" if "remote" in haystack.lower() else "United States"
+    for region in sorted(_NON_US_ONLY, key=len, reverse=True):
+        if _has_market_phrase(haystack, region):
+            return region.title()
+    return explicit
 
 
 # Known US companies per ATS (extend via portals config later)
@@ -934,6 +1014,22 @@ def _dedupe_jobs(jobs: list) -> list:
     return kept
 
 
+def _dedupe_exact_urls(jobs: list) -> list:
+    seen_urls = set()
+    unique_jobs = []
+    for j in jobs:
+        url = (j.get("url") or "").strip()
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            unique_jobs.append(j)
+    return unique_jobs
+
+
+def _filter_then_dedupe_jobs(jobs: list, profile: dict, location: str, salary_min: int) -> list:
+    """Apply market/profile filters before fuzzy deduping cross-source copies."""
+    return _dedupe_exact_urls(_dedupe_jobs(_filter_jobs(jobs, profile, location, salary_min)))
+
+
 def _filter_jobs(jobs: list, profile: dict, location: str, salary_min: int) -> list:
     """
     Keyword + location + conservative-salary pre-filter before expensive LLM scoring.
@@ -954,7 +1050,7 @@ def _filter_jobs(jobs: list, profile: dict, location: str, salary_min: int) -> l
         # US-market gate — ALWAYS on, regardless of the mission's location
         # filter. (The old branch skipped location checks entirely when the
         # filter was empty/'remote', letting EMEA/APAC/Middle-East roles through.)
-        if not _is_us_eligible(job_loc):
+        if not _is_us_eligible_job(j):
             continue
 
         # Narrower user-requested location (e.g. a specific city/state).
