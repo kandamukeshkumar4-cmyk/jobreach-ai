@@ -5,7 +5,7 @@ interface AppStore {
   missionStatus: 'idle' | 'running' | 'completed' | 'failed'
   setActiveMission: (id: string) => void
   activeProfileId: string | null
-  setActiveProfile: (id: string) => void
+  setActiveProfile: (id: string | null) => void
   runningMissions: number
   setRunningMissions: (n: number) => void
 }

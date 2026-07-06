@@ -35,8 +35,7 @@ import { SmoothInput } from '@/components/ui/smooth-input';
 import { TagsInput } from '@/components/profile/tags-input';
 import { LocationPicker } from '@/components/profile/location-picker';
 import { SkillsInput, type SkillEntry, serializeSkills, parseSkills } from '@/components/profile/skills-input';
-
-const PROFILE_ID_KEY = 'jobreach.activeProfileId';
+import { readActiveProfileId, writeActiveProfileId } from '@/lib/active-profile';
 
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'INR', 'CAD', 'AUD', 'JPY'] as const;
 
@@ -272,17 +271,19 @@ export default function ProfilePage() {
       setIdResolved(true);
       return;
     }
-    // Store empty — try localStorage.
-    try {
-      const stored = window.localStorage.getItem(PROFILE_ID_KEY);
+    // Store empty — fall back to this user's namespaced cache.
+    let cancelled = false;
+    readActiveProfileId().then((stored) => {
+      if (cancelled) return;
       if (stored) {
         setResolvedId(stored);
         setActiveProfile(stored);
       }
-    } catch {
-      // localStorage unavailable — proceed with blank form.
-    }
-    setIdResolved(true);
+      setIdResolved(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [activeProfileId, setActiveProfile]);
 
   const profileQuery = useQuery<ProfileOut>({
@@ -386,11 +387,7 @@ export default function ProfilePage() {
         setResolvedId(result.id);
         setActiveProfile(result.id);
         hydratedFor.current = result.id;
-        try {
-          window.localStorage.setItem(PROFILE_ID_KEY, result.id);
-        } catch {
-          // ignore — non-fatal
-        }
+        await writeActiveProfileId(result.id);
       }
       setForm(profileToForm(result));
       setSaveState({ kind: 'success' });

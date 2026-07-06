@@ -5,8 +5,12 @@ import Link from 'next/link';
 import { MetalFx, type MetalFxPreset } from 'metal-fx';
 import { cn } from '@/lib/format';
 
+// Brighter, higher-contrast brand fill + persistent glow so the key CTA
+// (e.g. Launch Mission) is unmistakable on the near-black background. Values
+// are literal (not var() tokens) so Tailwind always emits them — unreferenced
+// custom tokens/classes in globals.css get tree-shaken away.
 const PILL =
-  'inline-flex items-center justify-center gap-2 rounded-[var(--radius-pill)] bg-prismatic text-[#050506] font-semibold tracking-[-0.2px] transition-transform duration-100 active:scale-[0.96] focus-visible:outline-none';
+  'inline-flex items-center justify-center gap-2 rounded-[var(--radius-pill)] bg-[linear-gradient(120deg,#7cf3ff,#37b6ff_45%,#a689ff)] shadow-[0_0_26px_rgba(94,198,255,0.55),0_0_4px_rgba(124,243,255,0.5)] text-[#04121a] font-semibold tracking-[-0.2px] transition-[transform,filter] duration-100 hover:brightness-110 active:scale-[0.96] focus-visible:outline-none';
 
 type MetalFxOpts = { preset?: MetalFxPreset; strength?: number };
 
