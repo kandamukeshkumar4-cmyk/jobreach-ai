@@ -84,6 +84,6 @@ def run_company_research(company: str, job_url: str = "") -> dict:
     return result
 
 
-@celery_app.task(bind=True, name="app.workers.research.fetch_company_research")
+@celery_app.task(bind=True, queue="research", name="app.workers.research.fetch_company_research")
 def fetch_company_research(self, company: str, job_url: str = "") -> dict:
     return run_company_research(company, job_url)

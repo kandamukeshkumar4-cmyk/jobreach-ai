@@ -304,7 +304,7 @@ def _pub(r: redis.Redis, mission_id: str, event_type: str, message: str, detail:
     return saved.data[0]
 
 
-@celery_app.task(bind=True, name="app.workers.search.run_mission")
+@celery_app.task(bind=True, queue="search", name="app.workers.search.run_mission")
 def run_mission(self: Task, mission_id: str):
     """
     Full mission orchestrator:

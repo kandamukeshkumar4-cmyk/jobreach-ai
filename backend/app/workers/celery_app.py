@@ -52,20 +52,10 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    # --- Redis request-rate control (Upstash bills EVERY command) ---
-    # We previously ran 4 separate queues (search/score/research/resume); the
-    # worker BRPOP-polls each one continuously, so idle polling scaled ~4x and
-    # burned the 500K/mo Upstash cap in days. Everything now shares ONE default
-    # queue → the worker polls a single key. See supervisord.conf (no -Q) and
-    # the per-task decorators (queue= removed).
-    task_default_queue="celery",
-    # Fire-and-forget tasks (run_mission/score/research) don't need their result
-    # stored — only generate_resume_task reads it back (resumes.py AsyncResult),
-    # which re-enables results locally via ignore_result=False. This cuts a
-    # result-backend write+read per task.
-    task_ignore_result=True,
-    result_expires=1800,
-    # Poll the broker less aggressively; avoid tight visibility re-check loops.
-    broker_transport_options={"polling_interval": 2.0, "visibility_timeout": 3600},
-    broker_connection_retry_on_startup=True,
+    task_routes={
+        "app.workers.search.*": {"queue": "search"},
+        "app.workers.score.*": {"queue": "score"},
+        "app.workers.research.*": {"queue": "research"},
+        "app.workers.resume.*": {"queue": "resume"},
+    },
 )
