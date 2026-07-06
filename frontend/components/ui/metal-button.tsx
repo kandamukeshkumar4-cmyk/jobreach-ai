@@ -13,12 +13,12 @@ import { cn } from '@/lib/format';
 const BASE =
   'inline-flex items-center justify-center gap-2 rounded-[var(--radius-pill)] font-semibold tracking-[-0.2px] transition-[transform,filter,box-shadow] duration-150 focus-visible:outline-none';
 
-// Enabled skin — bright brand gradient + layered chromatic glow. Literal values
-// (not var() tokens) so Tailwind always emits them.
+// Enabled skin — bright blue brand gradient + blue glow, white text. Literal
+// values (not var() tokens) so Tailwind always emits them.
 const ENABLED =
-  'bg-[linear-gradient(120deg,#7cf3ff,#38b6ff_48%,#a689ff)] text-[#04121a] ' +
-  'shadow-[0_0_22px_rgba(94,198,255,0.55),0_0_40px_rgba(139,107,255,0.35),0_1px_0_rgba(255,255,255,0.4)_inset] ' +
-  'hover:brightness-110 hover:shadow-[0_0_28px_rgba(94,198,255,0.7),0_0_54px_rgba(139,107,255,0.45)] active:scale-[0.96]';
+  'bg-[linear-gradient(120deg,#5cc0ff,#2f6bff_52%,#2b58ff)] text-white ' +
+  'shadow-[0_0_22px_rgba(47,107,255,0.6),0_0_44px_rgba(47,107,255,0.35),0_1px_0_rgba(255,255,255,0.35)_inset] ' +
+  'hover:brightness-110 hover:shadow-[0_0_30px_rgba(47,107,255,0.78),0_0_60px_rgba(47,107,255,0.45)] active:scale-[0.96]';
 
 // Disabled skin — a clean, flat, still-legible pill. No gradient/glow (which,
 // dimmed, read as a broken dark blob).
