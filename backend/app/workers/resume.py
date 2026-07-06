@@ -790,7 +790,8 @@ def _sync_application_resume_links(
     }).execute()
 
 
-@celery_app.task(bind=True, queue="resume", name="app.workers.resume.generate_resume_task",
+@celery_app.task(bind=True, name="app.workers.resume.generate_resume_task",
+                 ignore_result=False,  # resumes.py reads this via AsyncResult
                  time_limit=RESUME_TASK_TIME_LIMIT_SECONDS,
                  soft_time_limit=RESUME_TASK_SOFT_LIMIT_SECONDS)
 def generate_resume_task(self, match_id: str, include_cover_letter: bool = False, tone: str = "direct"):
