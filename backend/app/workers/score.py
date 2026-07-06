@@ -383,7 +383,7 @@ def score_jobs_for_mission(db, r, mission_id: str, job_ids: list, profile: dict,
     _check_mission_complete(db, r, mission_id)
 
 
-@celery_app.task(bind=True, queue="score", name="app.workers.score.score_job")
+@celery_app.task(bind=True, name="app.workers.score.score_job")
 def score_job(self: Task, mission_id: str, job_id: str, profile: dict):
     s = get_settings()
     r = redis.from_url(_redis_url_with_ssl(s.redis_url), decode_responses=True)
