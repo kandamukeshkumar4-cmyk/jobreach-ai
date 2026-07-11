@@ -23,7 +23,6 @@ COPY . .
 # Supervisord config
 COPY supervisord.conf /etc/supervisor/conf.d/jobreach.conf
 
-# Azure App Service port
 EXPOSE 8000
 
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/jobreach.conf"]
