@@ -22,6 +22,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { MetalLink } from '@/components/ui/metal-button';
+import { PipelineHealth } from '@/components/tracker/pipeline-health';
 
 const CLOSED_STATUSES = new Set(['rejected', 'discarded', 'skip']);
 
@@ -401,6 +402,11 @@ export default function DashboardPage() {
           </div>
         )}
       </section>
+
+      {/* Pipeline health — funnel + conversion rates from the tracker */}
+      {!isInitialLoading && !isCoreError && !trackerListQuery.isError && (
+        <PipelineHealth applications={trackerListQuery.data ?? []} />
+      )}
 
       {/* Recent missions */}
       <section>

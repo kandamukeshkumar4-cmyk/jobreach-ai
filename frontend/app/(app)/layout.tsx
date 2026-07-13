@@ -8,8 +8,11 @@ import type { ReactNode } from 'react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
-
-const PROFILE_ID_KEY = 'jobreach.activeProfileId'
+import {
+  readActiveProfileId,
+  writeActiveProfileId,
+  clearActiveProfileId,
+} from '@/lib/active-profile'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -65,6 +68,9 @@ function Sidebar() {
     : ''
 
   async function handleSignOut() {
+    // Clear the cached profile id for THIS user before the session is torn
+    // down, so the next account on this browser can never inherit it.
+    clearActiveProfileId(user?.id)
     await supabase?.auth.signOut()
     router.push('/login')
   }
@@ -181,16 +187,25 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       // racing the server guard on a different read is the classic double-guard
       // bounce. This layout only resolves the active profile / onboarding.
 
-      // Fast path: localStorage hit → trust it, no network call
+      // Never inherit a previous user's in-memory selection. The store is
+      // cleared up-front and only re-set from an authoritative source below
+      // (this user's own namespaced cache, or the backend). Without this, a
+      // second account logging in via SPA nav would keep the first account's
+      // profile id in the store and 403 on launch.
+      setActiveProfile(null)
+
+      // Fast path: per-user localStorage hit → trust it, no network call.
+      // readActiveProfileId is namespaced by the current Supabase user id, so
+      // it can only ever return THIS user's profile id (or null).
       try {
-        const cached = localStorage.getItem(PROFILE_ID_KEY)
+        const cached = await readActiveProfileId()
         if (cached) {
           setActiveProfile(cached)
           setReady(true)
           return
         }
       } catch {
-        // localStorage unavailable — fall through to cloud check
+        // storage/session unavailable — fall through to cloud check
       }
 
       // Cloud check: ask the backend if this user already has a profile
@@ -199,7 +214,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         const { api } = await import('@/lib/api')
         const profile = await api.profile.me()
         if (profile?.id) {
-          try { localStorage.setItem(PROFILE_ID_KEY, profile.id) } catch {}
+          await writeActiveProfileId(profile.id)
           setActiveProfile(profile.id)
           setReady(true)
           return

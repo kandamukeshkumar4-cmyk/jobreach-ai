@@ -21,8 +21,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { SmoothInput } from '@/components/ui/smooth-input';
 import { FileUpload } from '@/components/ui/file-upload';
-
-const PROFILE_ID_KEY = 'jobreach.activeProfileId';
+import { writeActiveProfileId } from '@/lib/active-profile';
 
 const SOURCES = [
   { id: 'exa', label: 'Exa', hint: 'AI web search' },
@@ -186,11 +185,7 @@ export default function OnboardingPage() {
         const result = await api.profile.create(payload);
         setSavedProfileId(result.id);
         setActiveProfile(result.id);
-        try {
-          localStorage.setItem(PROFILE_ID_KEY, result.id);
-        } catch {
-          // non-fatal
-        }
+        await writeActiveProfileId(result.id);
       } catch (err) {
         setError(
           err instanceof Error

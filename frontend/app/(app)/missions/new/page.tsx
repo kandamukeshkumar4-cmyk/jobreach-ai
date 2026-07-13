@@ -19,6 +19,7 @@ import {
   activeMissionBanner,
   missionCreateErrorMessage,
 } from '@/lib/mission-guard'
+import { readActiveProfileId } from '@/lib/active-profile'
 
 // --- Source providers -------------------------------------------------------
 
@@ -82,11 +83,13 @@ export default function NewMissionPage() {
 
   useEffect(() => {
     if (activeProfileId) return
-    try {
-      const stored = window.localStorage.getItem('jobreach.activeProfileId')
-      if (stored) setActiveProfile(stored)
-    } catch {
-      // localStorage unavailable
+    let cancelled = false
+    // Per-user namespaced cache — never another account's profile id.
+    readActiveProfileId().then((stored) => {
+      if (!cancelled && stored) setActiveProfile(stored)
+    })
+    return () => {
+      cancelled = true
     }
   }, [activeProfileId, setActiveProfile])
 
@@ -106,8 +109,10 @@ export default function NewMissionPage() {
   // click can pass the canSubmit check twice and create two missions.
   const inFlightRef = useRef(false)
 
-  // Optionally resolve the active profile's name for display. There is no
-  // list-profiles endpoint, so this is purely a best-effort label fetch.
+  // Resolve the active profile to (a) show its name and (b) VERIFY it belongs
+  // to this user. GET /profile/{id} returns 404 when the id isn't owned by the
+  // caller, so a failed fetch means the cached id is stale/foreign — we must
+  // NOT let the form launch a mission against it (the backend would 403).
   const profileQuery = useQuery({
     queryKey: ['profile', activeProfileId],
     queryFn: () => api.profile.get(activeProfileId as string),
@@ -116,7 +121,23 @@ export default function NewMissionPage() {
     staleTime: 60_000,
   })
 
-  const hasProfile = !!activeProfileId
+  // A stale/foreign id resolves to 404 (or 403) — the id isn't owned by this
+  // user. Clear it so the "create your profile" path shows and nothing can be
+  // launched against another user's profile.
+  const profileNotOwned = useMemo(() => {
+    if (!profileQuery.isError) return false
+    const msg =
+      profileQuery.error instanceof Error ? profileQuery.error.message : ''
+    return msg.startsWith('404') || msg.startsWith('403')
+  }, [profileQuery.isError, profileQuery.error])
+
+  useEffect(() => {
+    if (activeProfileId && profileNotOwned) setActiveProfile(null)
+  }, [activeProfileId, profileNotOwned, setActiveProfile])
+
+  // Optimistic while loading (no flash for legit users); only a CONFIRMED
+  // not-owned result blocks the form.
+  const hasProfile = !!activeProfileId && !profileNotOwned
 
   const missionsQuery = useQuery({
     queryKey: ['missions', 'active-guard'],
