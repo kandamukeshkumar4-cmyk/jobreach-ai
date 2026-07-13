@@ -152,6 +152,9 @@ class ApplicationOut(BaseModel):
     job_title: str
     company: str
     status: ApplicationStatus
+    # Highest pipeline stage ever reached (evaluated..offer), maintained by a
+    # DB trigger — an app rejected after interviewing still shows 'interview'.
+    peak_status: Optional[str] = None
     overall_score: float
     grade: Grade
     resume_pdf_url: Optional[str] = None

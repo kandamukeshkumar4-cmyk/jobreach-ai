@@ -136,6 +136,9 @@ export interface ApplicationOut {
   job_title: string;
   company: string;
   status: ApplicationStatus;
+  /** Highest pipeline stage ever reached (evaluated..offer), from a DB
+   *  trigger — an app rejected after interviewing still shows 'interview'. */
+  peak_status?: string | null;
   overall_score: number;
   grade: Grade;
   resume_pdf_url?: string;

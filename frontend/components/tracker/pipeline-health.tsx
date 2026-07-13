@@ -7,24 +7,29 @@ import { LiquidGlassCard as Card } from '@/components/ui/liquid-glass';
 import { statusAccent } from '@/components/tracker/constants';
 
 /**
- * Cumulative funnel over the application pipeline. Statuses are
- * current-state, so each stage counts every application at or beyond it:
- * an app in "interview" has necessarily applied and been responded to,
- * and a rejection implies the employer responded to an application.
+ * Cumulative funnel over the application pipeline, counted by the highest
+ * stage each application EVER reached (peak_status, trigger-maintained), so
+ * an app rejected after interviewing still counts as an interview. Falls
+ * back to the current status for rows from older API responses; a rejection
+ * implies the employer responded to an application.
  */
+const RANK: Record<string, number> = {
+  applied: 1,
+  rejected: 2,
+  responded: 2,
+  interview: 3,
+  offer: 4,
+};
+
+function rankOf(a: ApplicationOut): number {
+  return RANK[a.peak_status ?? ''] ?? RANK[a.status] ?? 0;
+}
+
 const STAGES = [
-  {
-    key: 'applied',
-    label: 'Applied',
-    statuses: ['applied', 'responded', 'interview', 'offer', 'rejected'],
-  },
-  {
-    key: 'responded',
-    label: 'Responded',
-    statuses: ['responded', 'interview', 'offer', 'rejected'],
-  },
-  { key: 'interview', label: 'Interview', statuses: ['interview', 'offer'] },
-  { key: 'offer', label: 'Offer', statuses: ['offer'] },
+  { key: 'applied', label: 'Applied', minRank: 1 },
+  { key: 'responded', label: 'Responded', minRank: 2 },
+  { key: 'interview', label: 'Interview', minRank: 3 },
+  { key: 'offer', label: 'Offer', minRank: 4 },
 ] as const;
 
 function pct(part: number, whole: number): string {
@@ -36,11 +41,10 @@ export function PipelineHealth({
 }: {
   applications: ApplicationOut[];
 }) {
+  const ranks = applications.map(rankOf);
   const counts = STAGES.map((stage) => ({
     ...stage,
-    count: applications.filter((a) =>
-      (stage.statuses as readonly string[]).includes(a.status),
-    ).length,
+    count: ranks.filter((r) => r >= stage.minRank).length,
   }));
 
   const applied = counts[0].count;
