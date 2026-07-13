@@ -149,7 +149,7 @@ function WarmingUpBanner({ onRetry }: { onRetry: () => void }) {
               {WARMUP_STEPS[stepIndex]}
             </p>
             <p className="text-xs text-[var(--muted)] tracking-[-0.1px]">
-              Cold start — takes up to 30 seconds
+              Loading your data…
             </p>
           </div>
           <button

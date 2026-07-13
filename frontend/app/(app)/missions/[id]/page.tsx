@@ -110,8 +110,8 @@ export default function MissionConsolePage({ params }: MissionConsolePageProps) 
               Couldn&apos;t load mission details
             </p>
             <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
-              {error instanceof Error ? error.message : 'Unknown error'} — the
-              API may be cold-starting.
+              {error instanceof Error ? error.message : 'Unknown error'} — this
+              is usually momentary.
             </p>
           </div>
           <Button variant="secondary" onClick={() => refetch()}>

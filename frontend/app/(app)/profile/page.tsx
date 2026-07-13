@@ -438,8 +438,8 @@ export default function ProfilePage() {
                 Couldn&apos;t load your profile
               </h3>
               <p className="mt-1 text-sm text-[var(--muted)]">
-                The backend may be cold-starting (this can take up to 30
-                seconds). You can retry, or start editing below.
+                Couldn’t reach the server just now. You can retry, or start
+                editing below.
               </p>
             </div>
             <Button

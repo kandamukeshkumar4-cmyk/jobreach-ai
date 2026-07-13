@@ -2,14 +2,14 @@ import { AlertTriangle, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 
-const DEFAULT_HINT = 'The API may be cold-starting — this can take up to 30 seconds.';
+const DEFAULT_HINT = 'Couldn’t reach the server. This is usually momentary — please retry.';
 
 export interface ErrorStateProps {
   /** What failed, in the user's terms. e.g. "Couldn't load missions". */
   title: string;
   /** Optional dynamic detail (a normalised error message). */
   message?: string;
-  /** Reassuring next-step line; defaults to the cold-start hint. */
+  /** Reassuring next-step line; defaults to a transient-error hint. */
   hint?: string;
   onRetry?: () => void;
   retryLabel?: string;

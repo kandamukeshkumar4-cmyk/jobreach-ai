@@ -281,7 +281,7 @@ function ErrorState({
         Couldn&apos;t load matches
       </h3>
       <p className="mt-1.5 max-w-sm text-sm text-[var(--muted)]">
-        {message}. The API may be cold-starting — this can take up to 30 seconds.
+        {message}. This is usually momentary — please retry.
       </p>
       <div className="mt-5">
         <Button variant="secondary" onClick={onRetry}>
